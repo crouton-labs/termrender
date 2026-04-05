@@ -1,0 +1,590 @@
+{
+  "meta": {
+    "title": "TermRender — Terminal Rendering Engine",
+    "subtitle": "EARS Behavioral Spec",
+    "summary": "A standalone Python terminal rendering library that takes directive-flavored markdown as input and outputs rich ANSI-styled terminal output with panels, columns, trees, and mermaid flowcharts. Optimized for token-efficient LLM agent output.",
+    "version": 2,
+    "lastModified": "2026-04-05T03:25:32.003Z",
+    "draft": 2,
+    "reviewStartedAt": "2026-04-05T03:24:57.739Z",
+    "reviewCompletedAt": "2026-04-05T03:25:32.003Z"
+  },
+  "groups": [
+    {
+      "id": "input-format",
+      "name": "Input Format",
+      "description": "The markup language agents write to produce rendered output",
+      "context": "The input format must balance token efficiency (agents pay per token) with expressiveness. Markdown is the base because LLMs already speak it fluently. Container directives (:::) add layout semantics. Mermaid code blocks add diagrams. All styling goes through directives — no passthrough ANSI.\n\n  Agent writes:          Parser produces:         Renderer outputs:\n  ┌──────────┐          ┌──────────┐             ┌──────────┐\n  │ Markdown │ ──parse──► │   AST    │ ──layout──► │  ANSI    │\n  │ + :::    │          │  (tree)  │  + render   │  string  │\n  │ + mmd    │          │          │             │          │\n  └──────────┘          └──────────┘             └──────────┘",
+      "requirements": [
+        {
+          "id": "REQ-001",
+          "title": "Markdown base format",
+          "ears": {
+            "when": "When the renderer receives input",
+            "shall": "the system shall accept standard CommonMark markdown as the base content format, rendering headings, paragraphs, bold, italic, code spans, code blocks, and lists"
+          },
+          "criteria": [
+            {
+              "text": "Headings (h1-h4) render with appropriate styling/emphasis",
+              "checked": false
+            },
+            {
+              "text": "Inline formatting (bold, italic, code) maps to ANSI attributes",
+              "checked": false
+            },
+            {
+              "text": "Code blocks render with borders or indentation",
+              "checked": false
+            },
+            {
+              "text": "Unordered and ordered lists render correctly",
+              "checked": false
+            }
+          ],
+          "status": "approved",
+          "agentNotes": "CommonMark is the safest base — it's well-specified and every LLM produces it natively. We avoid GFM extensions (tables, strikethrough) initially to keep the parser simple, but the AST should be extensible.",
+          "userNotes": "",
+          "questions": [
+            {
+              "id": "q1",
+              "question": "Should we support GFM tables in v1, or defer?",
+              "response": ""
+            }
+          ]
+        },
+        {
+          "id": "REQ-002",
+          "title": "Container directives for layout",
+          "ears": {
+            "when": "When the input contains ::: directive blocks",
+            "shall": "the system shall parse them as layout containers with optional attributes in {key=value} syntax, supporting: panel, columns/col, tree, callout, quote, code, and divider"
+          },
+          "criteria": [
+            {
+              "text": ":::panel{title=\"X\" color=\"green\"} creates a bordered panel",
+              "checked": false
+            },
+            {
+              "text": ":::columns with nested :::col blocks creates side-by-side layout",
+              "checked": false
+            },
+            {
+              "text": ":::tree renders indented content as a tree with guide lines",
+              "checked": false
+            },
+            {
+              "text": ":::callout{type=\"warning\"} renders a colored callout box (info/warning/error/success)",
+              "checked": false
+            },
+            {
+              "text": ":::quote{by=\"Author\"} renders a styled blockquote with attribution",
+              "checked": false
+            },
+            {
+              "text": ":::code{lang=\"python\"} renders a syntax-highlighted code block with panel chrome",
+              "checked": false
+            },
+            {
+              "text": ":::divider{label=\"Section\"} renders a horizontal rule with optional centered label",
+              "checked": false
+            },
+            {
+              "text": "Unknown directive names are treated as plain panels (graceful fallback)",
+              "checked": false
+            }
+          ],
+          "status": "draft",
+          "agentNotes": "Revised per review — expanded from 3 directive types to 7. The ::: syntax is from the generic directives proposal (MyST, remark-directive). Directives are purely semantic — they carry no visual information except hints like color/type. callout, quote, code, and divider are the most commonly needed beyond the structural panel/columns/tree.",
+          "userNotes": "User asked: 'Are there others we should support?' — added callout, quote, code, divider.",
+          "questions": [
+            {
+              "id": "q7",
+              "question": "Are there any additional directive types beyond these 7 that you want in v1?",
+              "response": ""
+            }
+          ],
+          "startedAt": "2026-04-05T03:25:04.278Z",
+          "reviewAction": "approve",
+          "completedAt": "2026-04-05T03:25:14.714Z"
+        },
+        {
+          "id": "REQ-003",
+          "title": "Mermaid code blocks",
+          "ears": {
+            "when": "When the input contains a fenced code block with language 'mermaid'",
+            "shall": "the system shall parse the mermaid syntax and render it as an ASCII/Unicode flowchart inline with surrounding content, using mermaid-ascii as the rendering backend"
+          },
+          "criteria": [
+            {
+              "text": "graph TD (top-down) layout is supported",
+              "checked": false
+            },
+            {
+              "text": "graph LR (left-right) layout is supported",
+              "checked": false
+            },
+            {
+              "text": "Node labels with [] syntax are rendered",
+              "checked": false
+            },
+            {
+              "text": "Edge labels with |text| syntax are rendered",
+              "checked": false
+            },
+            {
+              "text": "Branching (A --> B & C) is supported",
+              "checked": false
+            },
+            {
+              "text": "mermaid-ascii is used as a Python dependency, not shelled out to",
+              "checked": false
+            }
+          ],
+          "status": "draft",
+          "agentNotes": "Revised per review — since this is a Python package, we use mermaid-ascii directly as a library dependency. No subprocess overhead, no Python runtime concern. Sequence diagram support depends on what mermaid-ascii supports.",
+          "userNotes": "User: 'We're going to make this a python package, so it's okay if it has python deps'",
+          "questions": [],
+          "startedAt": "2026-04-05T03:25:14.714Z",
+          "reviewAction": "approve",
+          "completedAt": "2026-04-05T03:25:20.874Z"
+        },
+        {
+          "id": "REQ-004",
+          "title": "Token efficiency",
+          "ears": {
+            "while": "While the input format is being designed",
+            "shall": "the system shall ensure that layout and styling are expressed through semantic directives, never requiring the agent to output decorative characters (borders, box-drawing, padding, repeated symbols)"
+          },
+          "criteria": [
+            {
+              "text": "A full-featured panel with title, border, and color costs <10 tokens of directive overhead",
+              "checked": false
+            },
+            {
+              "text": "Multi-column layout requires only :::columns/:::col markers, not manual spacing",
+              "checked": false
+            },
+            {
+              "text": "Trees use indentation only, not manual guide-line characters",
+              "checked": false
+            },
+            {
+              "text": "All styling goes through directives — no raw ANSI passthrough",
+              "checked": false
+            }
+          ],
+          "status": "approved",
+          "agentNotes": "This is the primary motivation for the project. Rich-style output requires agents to manually draw borders and pad content, wasting 200+ tokens per panel. Directive syntax encodes the same information in ~10 tokens. Directives-only policy confirmed in review (no ANSI passthrough).",
+          "userNotes": "",
+          "questions": []
+        }
+      ],
+      "openQuestions": []
+    },
+    {
+      "id": "layout-engine",
+      "name": "Layout Engine",
+      "description": "How the system computes sizes, positions, and composes nested blocks",
+      "context": "The layout engine is the hardest part. It needs to handle arbitrary nesting of panels, columns, trees, and diagrams. Think CSS block model but dramatically simpler — only vertical stacking, horizontal columns, and padding/borders. Content that exceeds available width is hard-wrapped at the container boundary.\n\n  ┌─ Panel ────────────────────────┐\n  │ ┌─ Columns ──────────────────┐ │\n  │ │ ┌─ Col 1 ─┐ ┌─ Col 2 ────┐│ │\n  │ │ │ text    │ │ :::tree    ││ │\n  │ │ │         │ │   src/     ││ │\n  │ │ │         │ │     foo.ts ││ │\n  │ │ └─────────┘ └────────────┘│ │\n  │ └────────────────────────────┘ │\n  │ ```mermaid                     │\n  │ ┌───┐    ┌───┐    ┌───┐       │\n  │ │ A │───►│ B │───►│ C │       │\n  │ └───┘    └───┘    └───┘       │\n  └────────────────────────────────┘",
+      "requirements": [
+        {
+          "id": "REQ-005",
+          "title": "Arbitrary nesting",
+          "ears": {
+            "when": "When directive blocks are nested inside each other",
+            "shall": "the system shall correctly compute layout for arbitrarily nested combinations of panels, columns, trees, and mermaid diagrams"
+          },
+          "criteria": [
+            {
+              "text": "Panels can contain columns, trees, mermaid blocks, and other panels",
+              "checked": false
+            },
+            {
+              "text": "Columns can contain panels, trees, and mermaid blocks",
+              "checked": false
+            },
+            {
+              "text": "Layout constraints propagate inward (parent width constrains children)",
+              "checked": false
+            },
+            {
+              "text": "Minimum width is respected — content is never clipped below its minimum renderable width",
+              "checked": false
+            }
+          ],
+          "status": "approved",
+          "agentNotes": "Arbitrary nesting makes the layout engine recursive. Each node computes its intrinsic size, then the parent allocates available width. This is a simplified constraint solver — not full CSS flexbox, but the same idea directionally.",
+          "userNotes": "",
+          "questions": []
+        },
+        {
+          "id": "REQ-006",
+          "title": "Terminal width adaptation",
+          "ears": {
+            "when": "When the renderer is invoked",
+            "shall": "the system shall detect the terminal width and adapt all layout to fit, wrapping text content and scaling columns proportionally"
+          },
+          "criteria": [
+            {
+              "text": "Default to stdout terminal width (shutil.get_terminal_size())",
+              "checked": false
+            },
+            {
+              "text": "Accept explicit width override for testing/piping",
+              "checked": false
+            },
+            {
+              "text": "Text wraps at word boundaries within containers",
+              "checked": false
+            },
+            {
+              "text": "Columns distribute available width proportionally",
+              "checked": false
+            }
+          ],
+          "status": "approved",
+          "agentNotes": "Word wrapping inside nested containers is tricky — available width is terminal width minus all ancestor padding/borders. Need to track 'available width' as we recurse down the tree.",
+          "userNotes": "",
+          "questions": []
+        },
+        {
+          "id": "REQ-007",
+          "title": "Column layout",
+          "ears": {
+            "when": "When a :::columns block contains multiple :::col children",
+            "shall": "the system shall render them side-by-side, distributing available width equally by default or according to explicit width attributes"
+          },
+          "criteria": [
+            {
+              "text": "Default: equal width split among columns",
+              "checked": false
+            },
+            {
+              "text": "Explicit width: :::col{width=60%} or :::col{width=30}",
+              "checked": false
+            },
+            {
+              "text": "Columns are padded to equal height with empty lines",
+              "checked": false
+            },
+            {
+              "text": "Column separator (single-char vertical line or gap) between columns",
+              "checked": false
+            }
+          ],
+          "status": "approved",
+          "agentNotes": "Columns are rendered independently to string buffers, then zipped line-by-line. Each column is rendered at its allocated width, split into lines, padded to max height, then joined horizontally.",
+          "userNotes": "",
+          "questions": [
+            {
+              "id": "q3",
+              "question": "Should columns have visible separators (│) or just whitespace gaps?",
+              "response": ""
+            }
+          ]
+        },
+        {
+          "id": "REQ-008",
+          "title": "Overflow handling",
+          "ears": {
+            "when": "When content exceeds available width after all nesting is accounted for",
+            "shall": "the system shall hard-wrap the content at the container boundary"
+          },
+          "criteria": [
+            {
+              "text": "Text wraps at word boundaries when possible",
+              "checked": false
+            },
+            {
+              "text": "Long unbreakable tokens (URLs, code) wrap mid-token at the boundary",
+              "checked": false
+            },
+            {
+              "text": "Mermaid diagrams that exceed available width are rendered at their natural size and clipped",
+              "checked": false
+            }
+          ],
+          "status": "approved",
+          "agentNotes": "Hard wrap was chosen over overflow indicators or stacking fallback. Simplest behavior, easiest to reason about. Confirmed in review.",
+          "userNotes": "",
+          "questions": []
+        }
+      ],
+      "openQuestions": []
+    },
+    {
+      "id": "styling",
+      "name": "Styling & Colors",
+      "description": "How colors and visual attributes are specified and rendered",
+      "requirements": [
+        {
+          "id": "REQ-009",
+          "title": "Directive-based color",
+          "ears": {
+            "when": "When a directive includes a color attribute",
+            "shall": "the system shall apply that color to the container's border and title using ANSI color codes"
+          },
+          "criteria": [
+            {
+              "text": "Named colors: red, green, blue, yellow, magenta, cyan, white, gray",
+              "checked": false
+            },
+            {
+              "text": "Color applies to borders and title, not content text by default",
+              "checked": false
+            },
+            {
+              "text": "Nested containers can have different colors",
+              "checked": false
+            }
+          ],
+          "status": "approved",
+          "agentNotes": "Keep the color model simple — named colors only, no hex/RGB. 8-color ANSI works everywhere. 256-color/truecolor could be a future extension.",
+          "userNotes": "",
+          "questions": []
+        },
+        {
+          "id": "REQ-010",
+          "title": "Panel styling",
+          "ears": {
+            "when": "When a :::panel directive is rendered",
+            "shall": "the system shall draw a Unicode box border around the content with optional title, padding, and color"
+          },
+          "criteria": [
+            {
+              "text": "Title renders centered or left-aligned in the top border",
+              "checked": false
+            },
+            {
+              "text": "1 character padding inside the panel by default",
+              "checked": false
+            },
+            {
+              "text": "Border uses box-drawing characters (─│┌┐└┘)",
+              "checked": false
+            }
+          ],
+          "status": "approved",
+          "agentNotes": "Panel = border + padding + title. Single-line Unicode box-drawing only. No ASCII fallback — see REQ-011.",
+          "userNotes": "",
+          "questions": [
+            {
+              "id": "q4",
+              "question": "Should panels support different border styles (single, double, rounded, heavy) or just one?",
+              "response": ""
+            }
+          ]
+        },
+        {
+          "id": "REQ-011",
+          "title": "Unicode-only rendering",
+          "ears": {
+            "if": "If the terminal does not support Unicode or ANSI colors",
+            "shall": "the system shall raise an error and refuse to render, rather than falling back to degraded output"
+          },
+          "criteria": [
+            {
+              "text": "Raises a clear error if TERM=dumb or terminal lacks Unicode support",
+              "checked": false
+            },
+            {
+              "text": "No ASCII fallback code path — single rendering implementation",
+              "checked": false
+            },
+            {
+              "text": "NO_COLOR environment variable disables color but still requires Unicode support",
+              "checked": false
+            }
+          ],
+          "status": "draft",
+          "agentNotes": "Revised per review — user explicitly requested throwing instead of degrading. 'We don't want to support two systems in one.' This simplifies the codebase significantly: one rendering path, no conditional box-drawing. NO_COLOR is still respected since it's about color only, not character set.",
+          "userNotes": "User: 'It should throw. We don't want to support two systems in one'",
+          "questions": [],
+          "startedAt": "2026-04-05T03:25:22.776Z",
+          "reviewAction": "approve",
+          "completedAt": "2026-04-05T03:25:27.377Z"
+        }
+      ],
+      "openQuestions": []
+    },
+    {
+      "id": "api-and-packaging",
+      "name": "API & Packaging",
+      "description": "How the library is consumed — CLI, programmatic API, and distribution",
+      "requirements": [
+        {
+          "id": "REQ-012",
+          "title": "CLI interface",
+          "ears": {
+            "when": "When invoked as a CLI tool",
+            "shall": "the system shall accept input from a file argument or stdin and write rendered output to stdout"
+          },
+          "criteria": [
+            {
+              "text": "termrender file.md renders the file",
+              "checked": false
+            },
+            {
+              "text": "cat file.md | termrender renders from stdin",
+              "checked": false
+            },
+            {
+              "text": "Supports --width and --no-color flags",
+              "checked": false
+            }
+          ],
+          "status": "approved",
+          "agentNotes": "Simple Unix-philosophy interface. Pipe-friendly. Removed --ascii flag since we no longer support ASCII fallback.",
+          "userNotes": "",
+          "questions": [
+            {
+              "id": "q5",
+              "question": "What should the CLI command name be?",
+              "response": ""
+            }
+          ]
+        },
+        {
+          "id": "REQ-013",
+          "title": "Programmatic API",
+          "ears": {
+            "when": "When imported as a Python library",
+            "shall": "the system shall expose a render(input: str, width: int | None = None, color: bool = True) -> str function that returns the ANSI-styled output"
+          },
+          "criteria": [
+            {
+              "text": "Single-function API: render(markdown) → str",
+              "checked": false
+            },
+            {
+              "text": "Options for width and color mode",
+              "checked": false
+            },
+            {
+              "text": "Type hints included (py.typed marker)",
+              "checked": false
+            },
+            {
+              "text": "Importable as: from termrender import render",
+              "checked": false
+            }
+          ],
+          "status": "approved",
+          "agentNotes": "Revised for Python. Keep it dead simple — one function, one string in, one string out. Type hints for IDE support.",
+          "userNotes": "",
+          "questions": []
+        },
+        {
+          "id": "REQ-014",
+          "title": "Standalone Python package",
+          "ears": {
+            "while": "While the package is distributed",
+            "shall": "the system shall be a standalone Python package on PyPI, installable independently of sisyphus, with mermaid-ascii and a markdown parser as its primary dependencies"
+          },
+          "criteria": [
+            {
+              "text": "Published to PyPI as 'termrender'",
+              "checked": false
+            },
+            {
+              "text": "pip install termrender installs CLI and library",
+              "checked": false
+            },
+            {
+              "text": "Dependencies: mermaid-ascii, markdown parser (mistune or markdown-it-py), Rich (for ANSI primitives)",
+              "checked": false
+            },
+            {
+              "text": "Works on Python 3.10+",
+              "checked": false
+            }
+          ],
+          "status": "draft",
+          "agentNotes": "Revised per review — Python package on PyPI instead of npm. mermaid-ascii is a direct dependency. Rich can be used for low-level ANSI output (colors, styles) without using its layout/panel system — we build our own layout engine on top.",
+          "userNotes": "User: 'It can be python — it doesn't need to be ts'",
+          "questions": [
+            {
+              "id": "q8",
+              "question": "Should we use Rich as a dependency for ANSI primitives, or handle ANSI escape codes directly?",
+              "response": ""
+            }
+          ],
+          "startedAt": "2026-04-05T03:25:28.647Z",
+          "reviewAction": "approve",
+          "completedAt": "2026-04-05T03:25:30.520Z"
+        }
+      ],
+      "openQuestions": []
+    },
+    {
+      "id": "tree-rendering",
+      "name": "Tree Rendering",
+      "description": "How tree structures are specified and displayed",
+      "requirements": [
+        {
+          "id": "REQ-015",
+          "title": "Indentation-based tree input",
+          "ears": {
+            "when": "When a :::tree directive contains indented text lines",
+            "shall": "the system shall render them as a tree with Unicode guide lines (├── └── │) preserving the hierarchy from indentation depth"
+          },
+          "criteria": [
+            {
+              "text": "2-space or 4-space indentation both work",
+              "checked": false
+            },
+            {
+              "text": "Guide lines connect siblings and show hierarchy",
+              "checked": false
+            },
+            {
+              "text": "Last child uses └── instead of ├──",
+              "checked": false
+            },
+            {
+              "text": "Color attribute applies to guide lines",
+              "checked": false
+            }
+          ],
+          "status": "approved",
+          "agentNotes": "Trees from indentation is extremely token-efficient — the agent just indents naturally. No special syntax needed beyond the :::tree wrapper.",
+          "userNotes": "",
+          "questions": [
+            {
+              "id": "q6",
+              "question": "Should trees also support markdown nested lists as input (- item / - subitem), or only raw indented text?",
+              "response": ""
+            }
+          ]
+        },
+        {
+          "id": "REQ-016",
+          "title": "Tree node annotations",
+          "ears": {
+            "where": "Where a tree node includes inline markup",
+            "shall": "the system shall render bold, italic, color spans, and status indicators (checkmarks, crosses) within tree node labels"
+          },
+          "criteria": [
+            {
+              "text": "Bold/italic in node labels via markdown syntax",
+              "checked": false
+            },
+            {
+              "text": "Status markers like [x] or [!] render as styled indicators",
+              "checked": false
+            },
+            {
+              "text": "Node-level color override possible",
+              "checked": false
+            }
+          ],
+          "status": "approved",
+          "agentNotes": "Annotated trees are very useful for showing file trees with status (modified, added, deleted) or task trees with completion status.",
+          "userNotes": "",
+          "questions": []
+        }
+      ],
+      "openQuestions": []
+    }
+  ]
+}

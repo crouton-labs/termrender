@@ -1,0 +1,408 @@
+{
+  "meta": {
+    "title": "TermRender — Technical Design",
+    "subtitle": "Technical Architecture",
+    "summary": "Design for a Python terminal rendering engine that takes directive-flavored markdown and outputs ANSI-styled terminal content. The core challenge is a layout engine that handles arbitrary nesting of panels, columns, trees, and mermaid diagrams within terminal width constraints.",
+    "version": 1,
+    "lastModified": "2026-04-05T03:44:46.328Z",
+    "draft": 1,
+    "reviewStartedAt": "2026-04-05T03:41:30.462Z",
+    "reviewCompletedAt": "2026-04-05T03:44:46.328Z"
+  },
+  "sections": [
+    {
+      "id": "architecture",
+      "name": "Architecture Overview",
+      "goal": "Understand the three-stage pipeline and how data flows from markdown input to ANSI output",
+      "context": "The system is a three-stage pipeline. Each stage has a clean boundary — the parser produces an AST, the layout engine annotates it with positions/sizes, and the renderer emits ANSI strings.\n\n  Input (str)                     AST                          Laid-out AST                  Output (str)\n  ┌──────────────┐              ┌──────────────┐              ┌──────────────┐              ┌──────────────┐\n  │  Markdown    │   parse()    │  Block tree  │  layout()    │  Block tree  │  render()    │  ANSI string │\n  │  + :::       │ ───────────► │  (unresolved │ ───────────► │  (with width,│ ───────────► │  ready for   │\n  │  + mermaid   │              │   sizes)     │              │   height)    │              │  stdout      │\n  └──────────────┘              └──────────────┘              └──────────────┘              └──────────────┘\n\n  Parser concerns:               AST concerns:                Layout concerns:              Render concerns:\n  - CommonMark                   - Block types                - Width propagation           - Box-drawing\n  - ::: directives               - Nesting                    - Column splitting            - ANSI colors\n  - Mermaid blocks               - Attributes                 - Word wrapping               - Text alignment\n  - Attribute parsing            - Inline markup              - Hard wrap overflow           - Mermaid output",
+      "items": [
+        {
+          "id": "DES-001",
+          "title": "Three-stage pipeline",
+          "description": "The top-level architecture: parse → layout → render",
+          "content": "The public API is a single function:\n\n  def render(source: str, width: int | None = None, color: bool = True) -> str\n\nInternally it runs three stages:\n\n  1. parse(source) -> Document       # markdown + directives → AST\n  2. layout(doc, width) -> Document   # annotate AST with resolved sizes\n  3. emit(doc, color) -> str          # walk AST, emit ANSI strings\n\nEach stage is a pure function (no side effects, no terminal IO). This makes testing trivial — you can assert on the AST after parse, on dimensions after layout, and on output strings after emit.\n\nThe Document is a tree of Block nodes. Each Block has a type (paragraph, panel, columns, tree, mermaid, etc.), optional attributes (color, title, width), and children (either more Blocks or inline text runs).",
+          "agentNotes": "Pure functions at each stage is the key architectural choice. It means you can unit test layout without rendering, test parsing without layout, etc. It also means the renderer is trivially swappable (e.g., for HTML output later).",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": null,
+          "userComment": "",
+          "startedAt": "2026-04-05T03:41:37.306Z"
+        },
+        {
+          "id": "DES-002",
+          "title": "AST node model",
+          "description": "The data structure that represents parsed content",
+          "content": "Every node in the AST is a Block dataclass:\n\n  @dataclass\n  class Block:\n      type: BlockType          # enum: document, paragraph, heading, panel,\n                                #        columns, col, tree, callout, quote,\n                                #        code, divider, mermaid, list, list_item\n      children: list[Block]     # nested blocks\n      text: list[InlineSpan]    # leaf-level text (for paragraphs, headings, etc.)\n      attrs: dict[str, str]     # directive attributes (color, title, width, etc.)\n      # --- set by layout ---\n      width: int | None = None  # resolved width in columns\n      height: int | None = None # resolved height in lines\n\n  @dataclass\n  class InlineSpan:\n      text: str\n      bold: bool = False\n      italic: bool = False\n      code: bool = False\n\nThe tree structure:\n\n  Document\n  ├── Heading (text=[InlineSpan(\"Deploy Status\")])\n  ├── Panel (attrs={title: \"Pipeline\", color: \"green\"})\n  │   ├── Paragraph (text=[...])\n  │   └── Mermaid (attrs={source: \"graph TD\\n  A-->B\"})\n  └── Columns\n      ├── Col (attrs={width: \"60%\"})\n      │   └── Paragraph\n      └── Col\n          └── Tree\n              └── (raw indented text stored in attrs)",
+          "agentNotes": "Using a single Block type with a type enum (rather than subclasses) keeps the code simple and pattern-matchable. The attrs dict is stringly-typed for flexibility — validation happens at parse time, not in the data model.",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": null,
+          "userComment": "",
+          "startedAt": "2026-04-05T03:41:47.069Z"
+        }
+      ],
+      "openQuestions": []
+    },
+    {
+      "id": "parser",
+      "name": "Parser",
+      "goal": "Understand how markdown + directives are parsed into the AST",
+      "context": "Parsing happens in two passes. First, a standard markdown parser handles CommonMark. Then a directive pass identifies ::: blocks and restructures the AST. Mermaid code blocks are detected by their language tag.\n\n  Raw input ──► Markdown pass ──► Directive pass ──► Final AST\n                 (CommonMark)      (::: blocks)       (Block tree)\n\nThe directive syntax:\n\n  :::panel{title=\"Status\" color=\"green\"}\n  Content here — can contain **markdown** and nested :::\n  :::\n\nAttributes use a simplified syntax: {key=value key2=\"value with spaces\"}",
+      "items": [
+        {
+          "id": "DES-003",
+          "title": "Markdown parser choice",
+          "description": "Which Python markdown library to use as the base parser",
+          "content": "We need a markdown parser that:\n\n1. Produces a walkable AST (not just HTML output)\n2. Is extensible (we need to add ::: directive handling)\n3. Handles CommonMark spec correctly\n4. Is actively maintained\n\nThe two serious options are mistune and markdown-it-py.\n\nmistune v3:\n- Pure Python, fast\n- Plugin system via custom directives\n- AST mode built-in (returns dict tree)\n- Already has a directive plugin (admonitions)\n- Small: ~2k lines\n\nmarkdown-it-py:\n- Port of markdown-it (JS), very spec-compliant\n- Plugin ecosystem (mdit-py-plugins has container directives)\n- Token-based (not tree), needs tree conversion\n- Larger: ~8k lines + plugins",
+          "decision": {
+            "proposal": {
+              "title": "mistune v3",
+              "description": "Smaller, faster, native AST mode, and its plugin system maps directly to our needs. The built-in directive plugin is close to what we need for ::: syntax. Less code to understand and debug."
+            },
+            "alternatives": [
+              {
+                "title": "markdown-it-py",
+                "description": "More spec-compliant and has a container plugin out of the box (mdit-py-plugins). However, it produces a flat token stream rather than a tree — we'd need a tree-building pass. Heavier dependency for marginal benefit."
+              },
+              {
+                "title": "Custom parser",
+                "description": "Write our own markdown subset parser. Maximum control but massive maintenance burden. No reason to do this when mistune exists."
+              }
+            ],
+            "lenses": {
+              "complexity": "mistune is simpler — native AST mode, smaller codebase, fewer layers",
+              "correctness": "markdown-it-py is more spec-compliant, but both handle our subset fine",
+              "maintenance": "mistune has a single maintainer (lepture) but is actively maintained and widely used"
+            }
+          },
+          "agentNotes": "The key factor is AST mode. mistune gives us a dict tree directly. markdown-it-py gives us tokens that we'd have to restructure. Since our layout engine needs a tree, mistune saves a whole conversion step.",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": "agree",
+          "userComment": "",
+          "startedAt": "2026-04-05T03:41:55.510Z",
+          "completedAt": "2026-04-05T03:42:21.782Z"
+        },
+        {
+          "id": "DES-004",
+          "title": "Directive parsing",
+          "description": "How ::: container directives are detected and parsed",
+          "content": "Directives follow this grammar:\n\n  :::name{key=value key2=\"value\"}\n  ... content (may contain nested ::: blocks) ...\n  :::\n\nParsing strategy:\n\n1. After the markdown pass, scan the AST for raw text blocks that start with :::\n2. Parse the directive line: extract name and attributes\n3. Find the matching closing ::: (respecting nesting depth)\n4. Recursively parse the content between open/close as markdown + directives\n5. Replace the raw text with a Block node of the appropriate type\n\nAttribute parsing is simple key=value with optional quotes:\n\n  {title=Status color=green}          → {\"title\": \"Status\", \"color\": \"green\"}\n  {title=\"Pipeline Status\" color=green} → {\"title\": \"Pipeline Status\", \"color\": \"green\"}\n\nNesting example:\n\n  :::panel{color=blue}            depth 0 → Panel\n  :::columns                      depth 1 → Columns\n  :::col                          depth 2 → Col\n  Some text                       content of Col\n  :::                             close Col\n  :::col                          depth 2 → Col\n  :::tree{color=cyan}             depth 3 → Tree\n  src/\n    main.py\n  :::                             close Tree\n  :::                             close Col\n  :::                             close Columns\n  :::                             close Panel\n\nThe parser tracks depth by counting open/close markers.",
+          "agentNotes": "The trickiest part is that ::: is both the open marker (with a name) and close marker (bare :::). We need a stack-based parser that counts depth. mistune's directive plugin handles some of this but may need extension for our nesting model.",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": null,
+          "userComment": "",
+          "startedAt": "2026-04-05T03:42:21.784Z"
+        },
+        {
+          "id": "DES-005",
+          "title": "Mermaid block detection",
+          "description": "How mermaid code blocks are identified and stored in the AST",
+          "content": "Mermaid blocks are standard fenced code blocks with the 'mermaid' language tag:\n\n  ```mermaid\n  graph TD\n      A[Build] --> B[Test]\n  ```\n\nThe markdown parser already handles fenced code blocks. We just need to:\n\n1. Detect code blocks where language == 'mermaid'\n2. Store the raw mermaid source in the Block's attrs\n3. At render time, pass the source to mermaid-ascii for rendering\n\nThe Block node:\n\n  Block(\n      type=BlockType.MERMAID,\n      children=[],\n      text=[],\n      attrs={\"source\": \"graph TD\\n    A[Build] --> B[Test]\"}\n  )\n\nNo special parsing of the mermaid syntax itself — that's mermaid-ascii's job.",
+          "agentNotes": "We deliberately don't parse mermaid syntax ourselves. mermaid-ascii handles it. We just detect it, store it, and render it at emit time. The only thing we need from the mermaid output is its dimensions (width x height in characters) for the layout engine.",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": null,
+          "userComment": "",
+          "startedAt": "2026-04-05T03:42:27.169Z"
+        }
+      ],
+      "openQuestions": [
+        {
+          "id": "oq1",
+          "question": "Should we pre-render mermaid during layout (to know dimensions) or defer to emit time?",
+          "options": [
+            {
+              "title": "Pre-render in layout",
+              "description": "Render mermaid to string during layout pass so we know exact width/height. Diagram is rendered once and cached. Layout can allocate correct space."
+            },
+            {
+              "title": "Defer to emit",
+              "description": "Estimate mermaid dimensions during layout, render at emit time. Simpler layout pass but may miscalculate space."
+            }
+          ],
+          "response": "Pre-render in layout",
+          "selectedOption": 0,
+          "startedAt": "2026-04-05T03:42:30.998Z",
+          "completedAt": "2026-04-05T03:42:47.927Z"
+        }
+      ]
+    },
+    {
+      "id": "layout-engine",
+      "name": "Layout Engine",
+      "goal": "Understand how the layout engine propagates width constraints and computes block dimensions",
+      "context": "The layout engine takes the AST and a target width (terminal columns) and annotates every node with its resolved width and height. It's a two-pass algorithm: width propagates top-down (parent constrains children), height propagates bottom-up (children determine parent height).\n\n  Terminal width: 80\n  ┌─ Panel (width=80, padding=1 → inner=78) ──────────────────────────────────┐\n  │ ┌─ Columns (width=78) ─────────────────────────────────────────────────┐  │\n  │ │ ┌─ Col (width=38) ──┐  1  ┌─ Col (width=38) ──────────────────────┐ │  │\n  │ │ │ Paragraph          │  │  │ Tree                                  │ │  │\n  │ │ │ (width=38)         │  │  │ (width=38)                            │ │  │\n  │ │ │ height=3           │  g  │ height=5                              │ │  │\n  │ │ │                    │  a  │                                       │ │  │\n  │ │ │ (padded to h=5)    │  p  │                                       │ │  │\n  │ │ └────────────────────┘     └───────────────────────────────────────┘ │  │\n  │ └──────────────────────────────────────────────────────────────────────┘  │\n  └──────────────────────────────────────────────────────────────────────────┘",
+      "items": [
+        {
+          "id": "DES-006",
+          "title": "Width propagation (top-down)",
+          "description": "How available width flows from parent to children",
+          "content": "Width propagation is the first layout pass. Starting from terminal width, each block type consumes some width and passes the remainder to children:\n\n  def resolve_width(block: Block, available: int) -> None:\n      block.width = available\n\n      match block.type:\n          case BlockType.PANEL:\n              # border (1+1) + padding (1+1) = 4 columns consumed\n              inner = available - 4\n              for child in block.children:\n                  resolve_width(child, inner)\n\n          case BlockType.COLUMNS:\n              cols = block.children\n              gap = 1  # 1-char gap between columns\n              total_gaps = (len(cols) - 1) * gap\n              col_width = (available - total_gaps) // len(cols)\n              for col in cols:\n                  resolve_width(col, col_width)\n\n          case BlockType.COL:\n              # explicit width attribute overrides equal split\n              for child in block.children:\n                  resolve_width(child, available)\n\n          case _:\n              for child in block.children:\n                  resolve_width(child, available)\n\nWidth budget per block type:\n\n  Block type    Consumed width\n  ──────────    ──────────────\n  panel         4 (border + padding)\n  columns       (n-1) * gap_width\n  col           0 (transparent)\n  callout       4 (border + padding, like panel)\n  quote         4 (│ + space + padding)\n  code          4 (border + padding)\n  tree          0 (guide lines are part of content)\n  divider       0 (fills available width)\n  mermaid       0 (renders at natural size, clipped if wider)",
+          "agentNotes": "The key insight is that width propagation is purely arithmetic — each block type has a fixed 'overhead' and passes the rest down. No negotiation, no min/max constraints in v1. Columns with explicit widths (e.g., 60%/40%) just change the split calculation.",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": null,
+          "userComment": "",
+          "startedAt": "2026-04-05T03:42:53.123Z"
+        },
+        {
+          "id": "DES-007",
+          "title": "Height computation (bottom-up)",
+          "description": "How block heights are determined from content and children",
+          "content": "After width is resolved, height is computed bottom-up:\n\n  def resolve_height(block: Block) -> None:\n      for child in block.children:\n          resolve_height(child)\n\n      match block.type:\n          case BlockType.PARAGRAPH:\n              # word-wrap text to block.width, count lines\n              block.height = count_wrapped_lines(block.text, block.width)\n\n          case BlockType.PANEL | BlockType.CALLOUT | BlockType.CODE:\n              inner_height = sum(c.height for c in block.children)\n              block.height = inner_height + 2  # top border + bottom border\n\n          case BlockType.COLUMNS:\n              # height = max child height (columns are padded to equal height)\n              block.height = max(c.height for c in block.children)\n\n          case BlockType.COL:\n              block.height = sum(c.height for c in block.children)\n\n          case BlockType.TREE:\n              block.height = count_tree_lines(block.attrs[\"source\"])\n\n          case BlockType.MERMAID:\n              rendered = mermaid_render(block.attrs[\"source\"])\n              block.height = rendered.count('\\n') + 1\n\n          case BlockType.DIVIDER:\n              block.height = 1\n\n          case _:\n              block.height = sum(c.height for c in block.children)",
+          "agentNotes": "Height is deterministic once width is known — it's just counting lines after wrapping. The only expensive operation is mermaid rendering, which we do once and cache the output string on the block.",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": null,
+          "userComment": "",
+          "startedAt": "2026-04-05T03:43:20.556Z"
+        },
+        {
+          "id": "DES-008",
+          "title": "Column rendering strategy",
+          "description": "How side-by-side columns are composed into output lines",
+          "content": "Columns are the most complex layout primitive. The strategy:\n\n1. Each column is rendered independently to a list of strings (one per line)\n2. Shorter columns are padded with empty lines to match the tallest\n3. Lines are zipped horizontally with a gap character between them\n\n  def render_columns(block: Block) -> list[str]:\n      col_outputs: list[list[str]] = []\n      for col in block.children:\n          lines = render_block_to_lines(col)\n          col_outputs.append(lines)\n\n      max_height = max(len(lines) for lines in col_outputs)\n\n      # pad shorter columns\n      for lines in col_outputs:\n          while len(lines) < max_height:\n              lines.append(' ' * col.width)\n\n      # zip horizontally\n      result = []\n      for row in range(max_height):\n          parts = [col_outputs[i][row].ljust(block.children[i].width)\n                   for i in range(len(col_outputs))]\n          result.append(' '.join(parts))  # 1-char gap\n\n      return result\n\nEach column renders its children as if it were a standalone document at its allocated width. The column renderer doesn't know or care what's inside each column — it just works with the output strings.",
+          "agentNotes": "The 'render to string buffer, then zip' approach is how every terminal column layout works (Rich, Textual, etc.). The alternative — interleaved rendering — is much harder and not worth it.",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": null,
+          "userComment": "",
+          "startedAt": "2026-04-05T03:43:26.610Z"
+        }
+      ],
+      "openQuestions": []
+    },
+    {
+      "id": "renderers",
+      "name": "Block Renderers",
+      "goal": "Understand how each block type produces ANSI output",
+      "context": "Each block type has a renderer function that takes a laid-out Block and emits a list of strings (one per terminal line). Renderers are pure functions — they read the block's resolved width/height and produce output.\n\n  :::panel{title=\"Status\" color=\"green\"}\n  All good.\n  :::\n\n  Renders as:\n  ┌─ Status ─────────────────────┐\n  │ All good.                    │\n  └──────────────────────────────┘\n  (green border + title)",
+      "items": [
+        {
+          "id": "DES-009",
+          "title": "Panel renderer",
+          "description": "How panels draw borders, titles, and padding",
+          "content": "Panel rendering:\n\n  width = block.width  # e.g., 40\n  title = block.attrs.get('title', '')\n  color = resolve_color(block.attrs.get('color'))\n\n  # top border with title\n  if title:\n      top = f'┌─ {title} ' + '─' * (width - len(title) - 5) + '┐'\n  else:\n      top = '┌' + '─' * (width - 2) + '┐'\n\n  # content lines with side borders + padding\n  inner_width = width - 4  # 2 borders + 2 padding\n  content_lines = render_children(block)\n  body = [f'│ {line.ljust(inner_width)} │' for line in content_lines]\n\n  # bottom border\n  bottom = '└' + '─' * (width - 2) + '┘'\n\n  # apply color to borders and title\n  return [color(top)] + body + [color(bottom)]\n\nColor is applied only to border characters and the title text. Content inside the panel retains its own styling.",
+          "agentNotes": "Title is left-aligned with a dash prefix (Rich style). The inner_width = width - 4 accounts for: left border (1) + left padding (1) + right padding (1) + right border (1).",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": null,
+          "userComment": "",
+          "startedAt": "2026-04-05T03:43:29.006Z"
+        },
+        {
+          "id": "DES-010",
+          "title": "Tree renderer",
+          "description": "How indented text becomes a tree with guide lines",
+          "content": "Tree rendering converts indented text into a tree with Unicode guide characters:\n\nInput (inside :::tree):\n  src\n    daemon\n      server.ts\n      orchestrator.ts\n    cli\n      commands\n\nOutput:\n  src\n  ├── daemon\n  │   ├── server.ts\n  │   └── orchestrator.ts\n  └── cli\n      └── commands\n\nAlgorithm:\n\n1. Parse indentation to determine depth (auto-detect 2 or 4 space indent)\n2. Build a tree of (label, children) nodes\n3. Render with guide lines:\n   - ├── for non-last siblings\n   - └── for last sibling\n   - │   for continuation of parent's sibling connector\n   - (spaces) when parent was last sibling\n\nInline markup within node labels is preserved:\n  **server.ts** [x]  → bold + green checkmark\n  *draft.ts* [!]     → italic + yellow warning",
+          "agentNotes": "The indent detection heuristic: look at the first indented line, measure its leading spaces. If 2, use 2-space mode. If 4, use 4-space mode. If ambiguous, default to 2. This handles both styles without configuration.",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": null,
+          "userComment": "",
+          "startedAt": "2026-04-05T03:43:30.969Z"
+        },
+        {
+          "id": "DES-011",
+          "title": "Callout renderer",
+          "description": "How callout boxes render with type-based styling",
+          "content": "Callouts are panels with a type-driven color and icon:\n\n  :::callout{type=\"warning\"}\n  Database migration required before deploy.\n  :::\n\nRenders as:\n  ┌─ ⚠ Warning ──────────────────┐\n  │ Database migration required   │\n  │ before deploy.                │\n  └──────────────────────────────┘\n  (yellow border)\n\nType → color/icon mapping:\n\n  Type       Color     Icon\n  ────       ─────     ────\n  info       blue      ℹ\n  warning    yellow    ⚠\n  error      red       ✖\n  success    green     ✔\n\nInternally, callout rendering delegates to the panel renderer with pre-filled title and color from the type mapping. No separate code path needed.",
+          "agentNotes": "Callouts are syntactic sugar over panels. The implementation is literally: resolve type → set attrs.title and attrs.color → call panel renderer.",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": null,
+          "userComment": "",
+          "startedAt": "2026-04-05T03:43:41.175Z"
+        },
+        {
+          "id": "DES-012",
+          "title": "Mermaid renderer",
+          "description": "How mermaid diagrams are rendered via mermaid-ascii",
+          "content": "Mermaid blocks delegate to the mermaid-ascii library:\n\n  from mermaid_ascii import render as mermaid_render\n\n  def render_mermaid(block: Block) -> list[str]:\n      source = block.attrs['source']\n      output = mermaid_render(source)  # returns rendered ASCII string\n      lines = output.split('\\n')\n\n      # clip to available width (hard wrap per REQ-008)\n      return [line[:block.width] for line in lines]\n\nThe mermaid output is treated as a pre-rendered block — no further word wrapping or layout. If it exceeds the available width, lines are clipped at the boundary.\n\nDuring the layout pass, we render the mermaid once and cache the output on the block to avoid double-rendering:\n\n  block.attrs['_rendered'] = mermaid_render(source)\n  block.height = block.attrs['_rendered'].count('\\n') + 1",
+          "decision": {
+            "proposal": {
+              "title": "Pre-render during layout",
+              "description": "Render mermaid during the layout pass to get exact dimensions. Cache the output on the block node. At emit time, just split and output the cached string. One render per diagram, exact sizing."
+            },
+            "alternatives": [
+              {
+                "title": "Estimate dimensions, render at emit",
+                "description": "Guess mermaid dimensions based on node count/edge count during layout, render at emit time. Simpler layout pass but dimensions may be wrong, causing misaligned columns or clipped content."
+              }
+            ],
+            "lenses": {
+              "correctness": "Pre-render guarantees correct dimensions — no estimation errors",
+              "performance": "Mermaid rendering is fast enough that doing it in layout is negligible",
+              "simplicity": "Pre-render is actually simpler — no estimation heuristics to maintain"
+            }
+          },
+          "agentNotes": "This also answers OQ1 from the parser section — pre-render is the way to go. The cached output is stored as a private _rendered attr.",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": "agree",
+          "userComment": "",
+          "startedAt": "2026-04-05T03:43:47.360Z",
+          "completedAt": "2026-04-05T03:43:54.526Z"
+        },
+        {
+          "id": "DES-013",
+          "title": "Divider renderer",
+          "description": "How horizontal rules with optional labels are rendered",
+          "content": "Dividers fill the available width with a horizontal line, optionally centering a label:\n\n  :::divider{label=\"Results\"}\n  :::\n\nRenders as:\n  ──────────── Results ─────────────\n\nWithout label:\n  ──────────────────────────────────\n\n  def render_divider(block: Block) -> list[str]:\n      label = block.attrs.get('label', '')\n      width = block.width\n      if label:\n          padding = (width - len(label) - 2) // 2\n          line = '─' * padding + ' ' + label + ' ' + '─' * padding\n          # handle odd width\n          line = line.ljust(width, '─')\n      else:\n          line = '─' * width\n      color = resolve_color(block.attrs.get('color'))\n      return [color(line)]",
+          "agentNotes": "Simplest renderer. One line, no children. Color optional.",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": null,
+          "userComment": "",
+          "startedAt": "2026-04-05T03:43:54.527Z"
+        },
+        {
+          "id": "DES-014",
+          "title": "Quote renderer",
+          "description": "How styled blockquotes with attribution are rendered",
+          "content": "Quotes use a left border bar with optional attribution:\n\n  :::quote{by=\"Dijkstra\"}\n  Simplicity is prerequisite for reliability.\n  :::\n\nRenders as:\n  │ Simplicity is prerequisite\n  │ for reliability.\n  │\n  │ — Dijkstra\n\n  def render_quote(block: Block) -> list[str]:\n      prefix = '│ '\n      inner_width = block.width - len(prefix)\n      content_lines = render_children_to_lines(block, inner_width)\n\n      attribution = block.attrs.get('by', '')\n      if attribution:\n          content_lines.append('')\n          content_lines.append(f'— {attribution}')\n\n      color = resolve_color(block.attrs.get('color', 'gray'))\n      return [color('│') + ' ' + line.ljust(inner_width)\n              for line in content_lines]\n\nDefault color is gray (muted). The bar character is colored, content is not.",
+          "agentNotes": "Quote is visually distinct from panel (no box, just left bar). Default gray keeps it visually subordinate to surrounding content.",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": null,
+          "userComment": "",
+          "startedAt": "2026-04-05T03:43:56.127Z"
+        },
+        {
+          "id": "DES-015",
+          "title": "Code block renderer",
+          "description": "How syntax-highlighted code blocks with chrome are rendered",
+          "content": "Code blocks render like panels but with syntax highlighting inside:\n\n  :::code{lang=\"python\"}\n  def hello():\n      print(\"world\")\n  :::\n\nRenders as:\n  ┌─ python ─────────────────────┐\n  │ def hello():                 │\n  │     print(\"world\")           │\n  └──────────────────────────────┘\n\nSyntax highlighting options:\n\n1. Use Pygments (Python's standard syntax highlighter) to produce ANSI-colored output\n2. The lang attribute selects the Pygments lexer\n3. If lang is unknown or omitted, render as plain monospace text\n\nThis makes :::code different from standard markdown code blocks (```) — the ::: version gets panel chrome and the lang attribute triggers highlighting. Standard ``` blocks render as indented monospace without borders.",
+          "decision": {
+            "proposal": {
+              "title": "Pygments for syntax highlighting",
+              "description": "Use Pygments' TerminalFormatter to produce ANSI-colored code. Pygments is the standard Python syntax highlighter, supports 500+ languages, and is already a transitive dependency of many tools."
+            },
+            "alternatives": [
+              {
+                "title": "No syntax highlighting",
+                "description": "Render code as plain monospace text inside the panel. Simpler, but misses a major value-add. Could be a v1 simplification with Pygments added later."
+              }
+            ],
+            "lenses": {
+              "value": "Syntax highlighting is high-impact, low-effort with Pygments",
+              "dependencies": "Pygments is well-maintained, pure Python, widely used",
+              "complexity": "~10 lines of code to integrate — trivial"
+            }
+          },
+          "agentNotes": "Pygments produces ANSI escape sequences directly via TerminalFormatter or Terminal256Formatter. We just pipe the code through it and wrap with panel borders.",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": null,
+          "userComment": "",
+          "startedAt": "2026-04-05T03:44:00.381Z"
+        }
+      ],
+      "openQuestions": []
+    },
+    {
+      "id": "ansi-and-styling",
+      "name": "ANSI Output & Styling",
+      "goal": "Understand how colors and text attributes are applied to output",
+      "context": "Every line of output is a string potentially containing ANSI escape sequences for color and style. We need a consistent approach to applying and composing these styles, especially when borders have one color and content has another.",
+      "items": [
+        {
+          "id": "DES-016",
+          "title": "ANSI style primitives",
+          "description": "How colors and text attributes are represented and applied",
+          "content": "Style application uses a thin wrapper around ANSI escape codes:\n\n  COLORS = {\n      'red': '\\033[31m',\n      'green': '\\033[32m',\n      'yellow': '\\033[33m',\n      'blue': '\\033[34m',\n      'magenta': '\\033[35m',\n      'cyan': '\\033[36m',\n      'white': '\\033[37m',\n      'gray': '\\033[90m',\n  }\n  RESET = '\\033[0m'\n  BOLD = '\\033[1m'\n  ITALIC = '\\033[3m'\n  DIM = '\\033[2m'\n\n  def style(text: str, color: str | None = None,\n            bold: bool = False, italic: bool = False) -> str:\n      codes = []\n      if bold: codes.append(BOLD)\n      if italic: codes.append(ITALIC)\n      if color: codes.append(COLORS.get(color, ''))\n      if not codes: return text\n      return ''.join(codes) + text + RESET\n\nThis is ~20 lines of code. No external dependency needed.\n\nWhen color=False is passed to render(), the style() function returns text unchanged (no escape codes).",
+          "decision": {
+            "proposal": {
+              "title": "Direct ANSI codes (no Rich dependency)",
+              "description": "Write a ~30-line style module with named colors and basic attributes. Our needs are simple — 8 named colors, bold, italic, dim. Rich would be a heavy dependency (15k+ lines) for something we can do in 30 lines."
+            },
+            "alternatives": [
+              {
+                "title": "Use Rich for styling",
+                "description": "Rich's Console and Style classes handle ANSI output, terminal detection, and color. But we'd use <1% of Rich's surface area, and it would become our largest dependency by far. Also, Rich's rendering model conflicts with ours — it wants to own the full output pipeline."
+              }
+            ],
+            "lenses": {
+              "simplicity": "30 lines vs 15k-line dependency — clear win for direct ANSI",
+              "correctness": "ANSI codes are a stable standard — nothing to get wrong",
+              "maintenance": "Zero maintenance burden for a static color map"
+            }
+          },
+          "agentNotes": "This also resolves the unanswered question from REQ-014 about using Rich. The answer is no — our ANSI needs are trivial and don't justify the dependency.",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": null,
+          "userComment": "",
+          "startedAt": "2026-04-05T03:44:05.874Z"
+        },
+        {
+          "id": "DES-017",
+          "title": "Width calculation with ANSI escapes",
+          "description": "How to measure visual width of strings containing escape sequences",
+          "content": "ANSI escape sequences are zero-width — they don't take up terminal columns. When wrapping text or padding to a width, we need the visual width, not len():\n\n  import re\n  ANSI_RE = re.compile(r'\\033\\[[0-9;]*m')\n\n  def visual_len(s: str) -> int:\n      return len(ANSI_RE.sub('', s))\n\n  def visual_ljust(s: str, width: int) -> str:\n      pad = width - visual_len(s)\n      return s + ' ' * max(0, pad)\n\nThese two functions are used everywhere in the renderers — any time we ljust, center, or measure a styled string. They're critical for column alignment and panel borders.\n\nEdge case: if content contains pre-existing ANSI codes (which shouldn't happen since we forbid passthrough), visual_len still handles it correctly by stripping all escape sequences.",
+          "agentNotes": "This is the kind of thing that's easy to forget and causes off-by-one alignment bugs everywhere. Establishing visual_len/visual_ljust as the standard helpers early prevents a whole class of bugs.",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": null,
+          "userComment": "",
+          "startedAt": "2026-04-05T03:44:25.693Z"
+        }
+      ],
+      "openQuestions": []
+    },
+    {
+      "id": "packaging",
+      "name": "Packaging & Distribution",
+      "goal": "Understand how the package is structured, built, and distributed",
+      "context": "The package is a standard Python project distributed via PyPI. It exposes both a library API and a CLI entry point.",
+      "items": [
+        {
+          "id": "DES-018",
+          "title": "Project structure",
+          "description": "Directory layout and module organization",
+          "content": "  termrender/\n  ├── pyproject.toml\n  ├── src/\n  │   └── termrender/\n  │       ├── __init__.py          # render() — the public API\n  │       ├── __main__.py          # CLI entry point\n  │       ├── parser.py            # markdown + directive parsing\n  │       ├── layout.py            # width/height resolution\n  │       ├── emit.py              # ANSI string generation\n  │       ├── style.py             # ANSI color/style helpers\n  │       ├── blocks.py            # Block, InlineSpan dataclasses\n  │       ├── renderers/\n  │       │   ├── __init__.py\n  │       │   ├── panel.py         # panel + callout\n  │       │   ├── columns.py       # columns + col\n  │       │   ├── tree.py          # tree rendering\n  │       │   ├── mermaid.py       # mermaid-ascii integration\n  │       │   ├── code.py          # syntax-highlighted code\n  │       │   ├── quote.py         # blockquote with attribution\n  │       │   ├── divider.py       # horizontal rule with label\n  │       │   └── text.py          # paragraphs, headings, lists\n  │       └── py.typed             # PEP 561 type hint marker\n  └── tests/\n      ├── test_parser.py\n      ├── test_layout.py\n      ├── test_emit.py\n      └── fixtures/                # .md input + expected output pairs\n\nUsing src/ layout (PEP 517) for clean packaging. Each renderer is a separate module for isolation — they can be tested independently.",
+          "agentNotes": "The renderer-per-file structure means adding a new directive type is: add a file in renderers/, add the BlockType enum value, register it in the emit dispatcher. No existing code needs to change.",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": null,
+          "userComment": "",
+          "startedAt": "2026-04-05T03:44:28.837Z"
+        },
+        {
+          "id": "DES-019",
+          "title": "Dependencies",
+          "description": "Runtime and dev dependencies",
+          "content": "Runtime dependencies:\n\n  Dependency       Purpose                    Size\n  ──────────       ───────                    ────\n  mistune >=3.0    Markdown parsing           ~2k lines\n  mermaid-ascii    Mermaid diagram rendering  ~5k lines\n  pygments         Syntax highlighting        large but ubiquitous\n\nDev dependencies:\n\n  pytest           Testing\n  ruff             Linting + formatting\n  mypy             Type checking\n  build            Package building\n\nTotal runtime deps: 3. All pure Python, no native extensions, no subprocess calls.\n\npyproject.toml:\n\n  [project]\n  name = \"termrender\"\n  requires-python = \">=3.10\"\n  dependencies = [\n      \"mistune>=3.0\",\n      \"mermaid-ascii>=1.0\",\n      \"pygments>=2.0\",\n  ]\n\n  [project.scripts]\n  termrender = \"termrender.__main__:main\"\n\n  [build-system]\n  requires = [\"hatchling\"]\n  build-backend = \"hatchling.build\"",
+          "agentNotes": "Three deps is lean for what this does. Pygments is the heaviest but it's already installed in most Python environments (IPython, Jupyter, Sphinx all depend on it). Could be made optional with a graceful fallback to plain text, but that's over-engineering for v1.",
+          "status": "draft",
+          "userNotes": "",
+          "reviewAction": null,
+          "userComment": "",
+          "startedAt": "2026-04-05T03:44:30.101Z"
+        }
+      ],
+      "openQuestions": [
+        {
+          "id": "oq2",
+          "question": "Where should the termrender repo live?",
+          "options": [
+            {
+              "title": "New standalone repo",
+              "description": "Clean separation, independent versioning, own CI. Standard for a reusable library."
+            },
+            {
+              "title": "Monorepo under claude-tools",
+              "description": "Alongside sisyphus. Easier to develop together initially, can extract later."
+            }
+          ],
+          "response": "New standalone repo",
+          "selectedOption": 0,
+          "startedAt": "2026-04-05T03:44:32.252Z",
+          "completedAt": "2026-04-05T03:44:44.093Z"
+        }
+      ]
+    }
+  ]
+}
