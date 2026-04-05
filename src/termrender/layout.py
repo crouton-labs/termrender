@@ -104,6 +104,10 @@ def resolve_height(block: Block) -> None:
         source = block.attrs.get("source", "")
         block.height = len(source.split("\n")) if source else 1
 
+    elif bt == BlockType.TABLE:
+        rows = block.attrs.get("rows", [])
+        block.height = len(rows) + 4  # top border + header + separator + data rows + bottom border
+
     elif bt == BlockType.MERMAID:
         source = block.attrs.get("source", "") or _plain_text(block.text)
         rendered = source  # fallback

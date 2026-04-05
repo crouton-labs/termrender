@@ -55,7 +55,7 @@ _DIRECTIVE_TO_BLOCK: dict[str, BlockType] = {
     "divider": BlockType.DIVIDER,
 }
 
-_mistune_md = mistune.create_markdown(renderer="ast")
+_mistune_md = mistune.create_markdown(renderer="ast", plugins=["table"])
 
 
 def _parse_attrs(raw: str | None) -> dict[str, Any]:
@@ -157,6 +157,33 @@ def _convert_ast(nodes: list[dict]) -> list[Block]:
                 type=BlockType.LIST,
                 children=items,
                 attrs={"ordered": ordered},
+            ))
+
+        elif ntype == "table":
+            children = node.get("children", [])
+            head_node = next((c for c in children if c["type"] == "table_head"), None)
+            body_node = next((c for c in children if c["type"] == "table_body"), None)
+
+            headers: list[list[InlineSpan]] = []
+            aligns: list[str | None] = []
+            if head_node:
+                for cell in head_node.get("children", []):
+                    headers.append(_convert_inline(cell.get("children", [])))
+                    aligns.append(cell.get("attrs", {}).get("align"))
+
+            rows: list[list[list[InlineSpan]]] = []
+            if body_node:
+                for row_node in body_node.get("children", []):
+                    if row_node["type"] == "table_row":
+                        row_cells = [
+                            _convert_inline(cell.get("children", []))
+                            for cell in row_node.get("children", [])
+                        ]
+                        rows.append(row_cells)
+
+            blocks.append(Block(
+                type=BlockType.TABLE,
+                attrs={"headers": headers, "rows": rows, "aligns": aligns},
             ))
 
         elif ntype == "thematic_break":

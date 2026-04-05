@@ -22,6 +22,7 @@ class BlockType(Enum):
     CODE = "code"
     DIVIDER = "divider"
     MERMAID = "mermaid"
+    TABLE = "table"
     LIST = "list"
     LIST_ITEM = "list_item"
 

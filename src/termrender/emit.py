@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from termrender.blocks import Block, BlockType
-from termrender.renderers import panel, columns, tree, code, text, divider, quote, mermaid
+from termrender.renderers import panel, columns, tree, code, text, divider, quote, mermaid, table
 
 
 def emit_block(block: Block, color: bool) -> list[str]:
@@ -38,6 +38,9 @@ def emit_block(block: Block, color: bool) -> list[str]:
 
         case BlockType.MERMAID:
             return mermaid.render(block, color)
+
+        case BlockType.TABLE:
+            return table.render(block, color)
 
         case BlockType.DIVIDER:
             return divider.render(block, color)
