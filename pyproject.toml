@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "termrender"
 version = "0.1.0"
 description = "Rich terminal rendering of directive-flavored markdown"
+readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [
