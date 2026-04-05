@@ -38,3 +38,17 @@ Attribution line is rendered for `block.attrs["author"]` **or** `block.attrs["by
 
 ## `panel.py` — callouts delegate through a proxy Block
 `render_callout` patches `title`, `color`, and `type=BlockType.PANEL` into a new `Block` instance and calls `render()` on it. The original block is not mutated. The callout type string (`"info"`, `"warning"`, `"error"`, `"success"`) is only used to look up `_CALLOUT_MAP`; an unknown type falls back to blue `ℹ`.
+
+## `mermaid.py` — leaf signature (not container), encoding fix, no returncode check, no truncation
+
+**Leaf signature, not container**: `render(block, color)` — no `render_child`. The parent `CLAUDE.md` incorrectly lists mermaid as a Container renderer.
+
+**`fix_mermaid_encoding`**: `mermaid-ascii` misreads UTF-8 input as Latin-1 and re-encodes, corrupting multi-byte characters (e.g. `→` becomes `â\x86\x92`). The fix is `text.encode("latin-1").decode("utf-8")`; on failure it silently returns the corrupted string — callers cannot distinguish fixed vs. corrupt output.
+
+**`except Exception` swallows everything**: timeout, missing tool, `MemoryError` — all fall back to `rendered = source` (the raw mermaid source text) silently. Returncode is also never checked; a non-zero exit still reads `result.stdout`, producing a blank-line block if stdout was empty. If both `_rendered` and `source` are absent, empty string is sent to `mermaid-ascii`.
+
+**`visual_ljust` pads but never truncates**: every output line is padded to `block.width`. Lines wider than `block.width` overflow without clipping. If `mermaid-ascii` emits a diagram wider than the allocated block, it silently exceeds the layout boundary.
+
+**Trailing blank line**: `rendered.split("\n")` on output ending with `\n` (typical subprocess output) produces a trailing empty string, which becomes a `block.width`-wide blank line appended to every mermaid block.
+
+Layout pre-renders into `block.attrs["_rendered"]` (see `src/termrender/CLAUDE.md`); this renderer re-runs the subprocess only when that key is absent.
