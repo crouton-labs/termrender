@@ -16,6 +16,10 @@ import mistune
 
 from termrender.blocks import Block, BlockType, InlineSpan
 
+
+class DirectiveError(Exception):
+    """Raised when directive syntax is malformed (unclosed, stray closer, etc.)."""
+
 # Matches ANSI escape sequences that are NOT SGR (Select Graphic Rendition).
 # SGR sequences have the form \x1b[...m — we keep those.
 # Strip OSC (\x1b]), screen control (\x1b[...J, \x1b[...H, etc.), and others.
@@ -55,7 +59,22 @@ _DIRECTIVE_TO_BLOCK: dict[str, BlockType] = {
     "divider": BlockType.DIVIDER,
 }
 
+_SELF_CLOSING_DIRECTIVES = frozenset({"divider"})
+
 _mistune_md = mistune.create_markdown(renderer="ast", plugins=["table"])
+
+
+def _any_self_closing_before(lines: list[str], close_idx: int) -> bool:
+    """Check if there's a self-closing directive on a preceding non-blank line."""
+    for j in range(close_idx - 1, -1, -1):
+        line = lines[j].strip()
+        if not line:
+            continue
+        m = _DIRECTIVE_OPEN.match(lines[j])
+        if m and m.group(1) in _SELF_CLOSING_DIRECTIVES:
+            return True
+        return False
+    return False
 
 
 def _parse_attrs(raw: str | None) -> dict[str, Any]:
@@ -261,6 +280,14 @@ def _split_directives(source: str) -> list[dict]:
 
         # Check for directive closer
         m_close = _DIRECTIVE_CLOSE.match(line)
+        if m_close and not stack:
+            if not _any_self_closing_before(lines, i):
+                raise DirectiveError(
+                    f"line {i + 1}: stray ':::' closer with no open directive"
+                )
+            # Stray closer after a self-closing directive like divider — skip
+            i += 1
+            continue
         if m_close and stack:
             if stack[-1]["depth"] > 1:
                 # Closing a nested directive
@@ -292,13 +319,14 @@ def _split_directives(source: str) -> list[dict]:
             "content": "\n".join(current_md_lines),
         })
 
-    # If stack is not empty, treat unclosed directives as markdown
-    for entry in stack:
-        body = "\n".join(entry["body_lines"])
-        segments.append({
-            "type": "markdown",
-            "content": f":::{entry['name']}\n{body}",
-        })
+    # If stack is not empty, the source has unclosed directives
+    if stack:
+        unclosed = stack[-1]
+        # Find the line number where this directive was opened
+        name = unclosed["name"]
+        raise DirectiveError(
+            f"unclosed directive ':::{name}' — missing closing ':::'"
+        )
 
     return segments
 

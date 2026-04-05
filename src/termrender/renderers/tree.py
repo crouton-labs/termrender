@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from termrender.blocks import Block, InlineSpan
-from termrender.style import style, visual_ljust, render_spans
+from termrender.style import style, visual_ljust, render_spans, visual_len
 
 # Unicode box-drawing guide characters
 BRANCH = "├── "
@@ -81,6 +81,20 @@ def _label_to_spans(label: str) -> list[InlineSpan]:
     return spans if spans else [InlineSpan(text=label)]
 
 
+def _guide_chars() -> tuple[str, str, str, str]:
+    """Get guide characters padded to consistent visual width.
+
+    All prefixes must have the same visual width for alignment.
+    When eaw=A=2, "├── " and "│   " have different visual widths, so we normalize.
+    """
+    target = visual_len("├── ")  # this is the reference width
+    branch = visual_ljust("├── ", target)
+    last_branch = visual_ljust("└── ", target)
+    continuation = visual_ljust("│   ", target)
+    blank = " " * target
+    return branch, last_branch, continuation, blank
+
+
 def _style_guide(text: str, guide_color: str | None, color: bool) -> str:
     """Style a guide line character with the tree's color attribute."""
     if guide_color and color:
@@ -99,6 +113,9 @@ def render(block: Block, color: bool) -> list[str]:
 
     if not nodes:
         return [visual_ljust("", width)]
+
+    # Get dynamically-padded guide characters for the current ambiguous width setting
+    _branch, _last_branch, _continuation, _blank = _guide_chars()
 
     # For each node, determine its guide prefix based on depth and siblings
     output: list[str] = []
@@ -145,15 +162,15 @@ def render(block: Block, color: bool) -> list[str]:
                     if jdepth < d:
                         break
                 if has_more:
-                    prefix_parts.append(_style_guide(CONTINUATION, guide_color, color))
+                    prefix_parts.append(_style_guide(_continuation, guide_color, color))
                 else:
-                    prefix_parts.append(BLANK)
+                    prefix_parts.append(_blank)
 
             # Current depth connector
             if is_last[i]:
-                prefix_parts.append(_style_guide(LAST_BRANCH, guide_color, color))
+                prefix_parts.append(_style_guide(_last_branch, guide_color, color))
             else:
-                prefix_parts.append(_style_guide(BRANCH, guide_color, color))
+                prefix_parts.append(_style_guide(_branch, guide_color, color))
 
             prefix = "".join(prefix_parts)
             styled_label = render_spans(_label_to_spans(label), color)

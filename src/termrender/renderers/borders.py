@@ -23,8 +23,15 @@ def render_box(
         border_color: Color name for the border (used by panels).
         dim: Whether to dim the border (used by code blocks).
     """
-    inner_w = width - 2  # border chars on each side
-    content_w = inner_w - 2  # 1-char padding on each side
+    # Calculate border character widths dynamically
+    border_v = visual_len("│")  # 1 or 2 depending on ambiguous width
+    dash_v = visual_len("─")
+    corner_v = visual_len("┌")  # same as ┐, └, ┘
+
+    # inner_w = space between the two vertical borders
+    inner_w = width - 2 * border_v
+    # content_w = space for actual content (inner minus 1-space padding each side)
+    content_w = inner_w - 2
 
     # Build style kwargs for borders
     style_kw: dict = {"enabled": color}
@@ -33,18 +40,22 @@ def render_box(
     if dim:
         style_kw["dim"] = True
 
-    # Top border
+    # Top border: ┌ + title/dashes + ┐, total visual_len = width
     if title:
-        title_part = f"─ {title} "
-        fill_count = max(0, inner_w - visual_len(title_part))
+        title_part = "─ " + title + " "
+        title_visual = visual_len(title_part)
+        remaining = inner_w - title_visual
+        fill_count = max(0, remaining // dash_v)
         top_raw = "┌" + title_part + "─" * fill_count + "┐"
     else:
-        top_raw = "┌" + "─" * inner_w + "┐"
+        fill_count = max(0, inner_w // dash_v)
+        top_raw = "┌" + "─" * fill_count + "┐"
     top = style(top_raw, **style_kw)
     top = visual_ljust(top, width)
 
     # Bottom border
-    bot_raw = "└" + "─" * inner_w + "┘"
+    fill_count = max(0, inner_w // dash_v)
+    bot_raw = "└" + "─" * fill_count + "┘"
     bot = style(bot_raw, **style_kw)
     bot = visual_ljust(bot, width)
 

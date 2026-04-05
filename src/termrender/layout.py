@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 
 from termrender.blocks import Block, BlockType
-from termrender.style import wrap_text
+from termrender.style import wrap_text, visual_len
 
 
 def _plain_text(spans: list) -> str:
@@ -16,8 +16,14 @@ def resolve_width(block: Block, available: int) -> None:
     block.width = available
 
     bt = block.type
-    if bt in (BlockType.PANEL, BlockType.CALLOUT, BlockType.CODE, BlockType.QUOTE):
-        inner = max(available - 4, 1)
+    if bt in (BlockType.PANEL, BlockType.CALLOUT, BlockType.CODE):
+        border_overhead = visual_len("│") * 2 + 2  # left border + left pad + right pad + right border
+        inner = max(available - border_overhead, 1)
+        for child in block.children:
+            resolve_width(child, inner)
+    elif bt == BlockType.QUOTE:
+        bar_overhead = visual_len("│") + 1  # "│ " prefix
+        inner = max(available - bar_overhead, 1)
         for child in block.children:
             resolve_width(child, inner)
 
@@ -26,7 +32,8 @@ def resolve_width(block: Block, available: int) -> None:
         if n == 0:
             return
         gaps = n - 1
-        inner = available
+        # Reserve space for inter-column gaps before distributing widths
+        distributable = max(available - gaps, n)
 
         # Separate children into explicit-width and auto-width
         explicit: dict[int, int] = {}
@@ -36,14 +43,14 @@ def resolve_width(block: Block, available: int) -> None:
                 w_str = str(w)
                 try:
                     if w_str.endswith("%"):
-                        explicit[i] = max(int(inner * float(w_str[:-1]) / 100), 1)
+                        explicit[i] = max(int(distributable * float(w_str[:-1]) / 100), 1)
                     else:
                         explicit[i] = max(int(w_str), 1)
                 except ValueError:
                     pass
 
-        used = sum(explicit.values()) + gaps
-        remaining = max(inner - used, 0)
+        used = sum(explicit.values())
+        remaining = max(distributable - used, 0)
         auto_count = n - len(explicit)
 
         for i, col in enumerate(block.children):
@@ -127,7 +134,7 @@ def resolve_height(block: Block) -> None:
         block.height = len(rendered.split("\n")) if rendered else 1
 
     elif bt == BlockType.QUOTE:
-        block.height = sum(c.height or 0 for c in block.children) + (1 if block.attrs.get("by") else 0)
+        block.height = sum(c.height or 0 for c in block.children) + (1 if block.attrs.get("author") or block.attrs.get("by") else 0)
 
     else:
         block.height = sum(c.height or 0 for c in block.children)

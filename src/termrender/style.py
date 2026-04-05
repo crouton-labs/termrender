@@ -12,6 +12,73 @@ if TYPE_CHECKING:
 # Compiled regex matching ANSI escape sequences
 ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 
+# Ambiguous-width character handling.
+# 1 = narrow (default for most Western terminals)
+# 2 = wide (CJK terminals, some tmux configurations)
+_ambiguous_width: int = 1
+
+
+def set_ambiguous_width(w: int) -> None:
+    global _ambiguous_width
+    _ambiguous_width = w
+
+
+def get_ambiguous_width() -> int:
+    return _ambiguous_width
+
+# Characters with Emoji_Presentation=Yes that terminals render as 2 cells wide
+# even without a VS16 (U+FE0F) suffix.  Characters that are Emoji=Yes but
+# Emoji_Presentation=No (e.g. ℹ ⚠ ✔ ✖) are 1-wide in text presentation;
+# the VS16 handler (visual_len, line ~209) already widens them to 2 when
+# an explicit emoji-presentation selector follows.
+_EMOJI_WIDE_RANGES: tuple[tuple[int, int], ...] = (
+    # BMP — only Emoji_Presentation=Yes codepoints (Unicode 15.0)
+    (0x231A, 0x231B),  # ⌚⌛ watch/hourglass
+    (0x23E9, 0x23EC),  # ⏩⏪⏫⏬
+    (0x23F0, 0x23F0),  # ⏰ alarm clock
+    (0x25FD, 0x25FE),  # ◽◾ squares
+    (0x2614, 0x2615),  # ☔☕
+    (0x2648, 0x2653),  # ♈–♓ zodiac
+    (0x267F, 0x267F),  # ♿ wheelchair
+    (0x2693, 0x2693),  # ⚓ anchor
+    (0x26A1, 0x26A1),  # ⚡ lightning
+    (0x26AA, 0x26AB),  # ⚪⚫ circles
+    (0x26BD, 0x26BE),  # ⚽⚾ balls
+    (0x26C4, 0x26C5),  # ⛄⛅ snowman/sun
+    (0x26CE, 0x26CE),  # ⛎ Ophiuchus
+    (0x26D4, 0x26D4),  # ⛔ no entry
+    (0x26EA, 0x26EA),  # ⛪ church
+    (0x26F2, 0x26F3),  # ⛲⛳ fountain/golf
+    (0x26F5, 0x26F5),  # ⛵ sailboat
+    (0x26FA, 0x26FA),  # ⛺ tent
+    (0x26FD, 0x26FD),  # ⛽ fuel pump
+    (0x2705, 0x2705),  # ✅ check mark
+    (0x270A, 0x270B),  # ✊✋ fists
+    (0x2728, 0x2728),  # ✨ sparkles
+    (0x2753, 0x2755),  # ❓❔❕ question/exclamation
+    (0x2757, 0x2757),  # ❗ exclamation
+    (0x2795, 0x2797),  # ➕➖➗ math
+    (0x27B0, 0x27B0),  # ➰ curly loop
+    (0x27BF, 0x27BF),  # ➿ double curly loop
+    (0x2B1B, 0x2B1C),  # ⬛⬜ large squares
+    (0x2B50, 0x2B50),  # ⭐ star
+    (0x2B55, 0x2B55),  # ⭕ circle
+    # Supplementary planes — nearly all Emoji_Presentation=Yes
+    (0x1F004, 0x1F004),
+    (0x1F0CF, 0x1F0CF),
+    (0x1F18E, 0x1F18E),
+    (0x1F191, 0x1F19A),
+    (0x1F1E0, 0x1F1FF),
+    (0x1F200, 0x1F202),
+    (0x1F21A, 0x1F21A),
+    (0x1F22F, 0x1F22F),
+    (0x1F232, 0x1F23A),
+    (0x1F250, 0x1F251),
+    (0x1F300, 0x1F9FF),
+    (0x1FA00, 0x1FA6F),
+    (0x1FA70, 0x1FAFF),
+)
+
 # Style constants
 RESET = '\x1b[0m'
 BOLD = '\x1b[1m'
@@ -65,9 +132,20 @@ def _char_width(c: str) -> int:
     # Combining marks and format characters are zero-width
     if cat.startswith('M') or cat == 'Cf':
         return 0
+    eaw = unicodedata.east_asian_width(c)
     # East Asian wide/fullwidth
-    if unicodedata.east_asian_width(c) in ('W', 'F'):
+    if eaw in ('W', 'F'):
         return 2
+    # Ambiguous-width characters (box-drawing, bullets, etc.)
+    if eaw == 'A':
+        return _ambiguous_width
+    # Emoji and symbols that terminals render as 2 cells despite east_asian_width=N
+    cp = ord(c)
+    for lo, hi in _EMOJI_WIDE_RANGES:
+        if cp < lo:
+            break  # ranges are sorted, no point continuing
+        if lo <= cp <= hi:
+            return 2
     return 1
 
 
@@ -107,10 +185,11 @@ def visual_center(s: str, width: int, fillchar: str = ' ') -> str:
     vl = visual_len(s)
     if vl >= width:
         return s
+    fill_w = visual_len(fillchar) or 1
     total_pad = width - vl
-    left_pad = total_pad // 2
-    right_pad = total_pad - left_pad
-    return fillchar * left_pad + s + fillchar * right_pad
+    left_count = (total_pad // 2) // fill_w
+    right_count = (total_pad - left_count * fill_w) // fill_w
+    return fillchar * left_count + s + fillchar * right_count
 
 
 def wrap_text(text: str, width: int) -> list[str]:

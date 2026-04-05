@@ -1,9 +1,10 @@
 """CLI entry point for termrender."""
 
 import argparse
+import os
 import sys
 
-from termrender import render, TerminalError
+from termrender import render, TerminalError, DirectiveError
 
 __version__ = "0.1.0"
 
@@ -73,6 +74,11 @@ def main() -> None:
         help="strip ANSI color codes from output (same as NO_COLOR=1)",
     )
     parser.add_argument(
+        "--cjk",
+        action="store_true",
+        help="treat ambiguous-width Unicode characters as double-width (for CJK terminals)",
+    )
+    parser.add_argument(
         "-V", "--version",
         action="version",
         version=f"%(prog)s {__version__}",
@@ -88,11 +94,17 @@ def main() -> None:
 
     source = infile.read()
 
+    if args.cjk:
+        os.environ["TERMRENDER_CJK"] = "1"
+
     try:
         output = render(source, width=args.width, color=not args.no_color)
     except TerminalError as e:
         print(f"termrender: error: {e}", file=sys.stderr)
         print("  Hint: use a terminal that supports Unicode, or set TERM appropriately.", file=sys.stderr)
+        sys.exit(1)
+    except DirectiveError as e:
+        print(f"termrender: syntax error: {e}", file=sys.stderr)
         sys.exit(1)
 
     sys.stdout.write(output)

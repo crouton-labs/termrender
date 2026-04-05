@@ -2,9 +2,10 @@
 
 import os
 import shutil
-from termrender.parser import parse
+from termrender.parser import parse, DirectiveError
 from termrender.layout import layout
 from termrender.emit import emit
+from termrender.style import set_ambiguous_width
 
 
 class TerminalError(Exception):
@@ -25,6 +26,10 @@ def render(source: str, width: int | None = None, color: bool = True) -> str:
     Raises:
         TerminalError: If terminal is unsupported (TERM=dumb)
     """
+    # Check for ambiguous width setting
+    if os.environ.get("TERMRENDER_CJK"):
+        set_ambiguous_width(2)
+
     # REQ-011: Check terminal capability
     if os.environ.get("TERM") == "dumb":
         raise TerminalError("Terminal type 'dumb' does not support Unicode rendering")
