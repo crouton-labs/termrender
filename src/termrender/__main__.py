@@ -158,7 +158,7 @@ def main() -> None:
     if args.cjk:
         os.environ["TERMRENDER_CJK"] = "1"
 
-    # --tmux: render in a new tmux side pane
+    # --tmux: render in a new tmux side pane, sized to fit
     if args.tmux:
         import shlex
         import subprocess
@@ -168,7 +168,35 @@ def main() -> None:
             _error("not inside a tmux session",
                    fix="run inside tmux or omit --tmux")
 
-        # Save source so the new pane can render it with its own width
+        # Determine desired pane width
+        if args.width:
+            pane_width = args.width
+        else:
+            # Preview render to measure content width
+            from termrender.style import visual_len
+            try:
+                preview = render(source, width=80, color=False)
+                max_w = max(
+                    (visual_len(line) for line in preview.split('\n') if line),
+                    default=40,
+                )
+                pane_width = max(max_w, 40)
+            except Exception:
+                pane_width = 80
+
+        # Cap to available tmux space (leave room for the source pane)
+        try:
+            result = subprocess.run(
+                ["tmux", "display-message", "-p", "#{pane_width}"],
+                capture_output=True, text=True, check=True,
+            )
+            available = int(result.stdout.strip())
+            pane_width = min(pane_width, available - 10)
+        except Exception:
+            pass
+        pane_width = max(pane_width, 20)  # absolute minimum
+
+        # Save source so the new pane can render it
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".md", prefix="termrender-", delete=False,
         ) as f:
@@ -181,14 +209,13 @@ def main() -> None:
             cmd_parts.append("--no-color")
         if args.cjk:
             cmd_parts.append("--cjk")
-        if args.width:
-            cmd_parts.extend(["-w", str(args.width)])
+        cmd_parts.extend(["-w", str(pane_width)])
 
         pane_cmd = " ".join(cmd_parts) + " | less -R; rm -f " + shlex.quote(tmpfile)
 
         try:
             subprocess.run(
-                ["tmux", "split-window", "-h", pane_cmd],
+                ["tmux", "split-window", "-h", "-f", "-l", str(pane_width), pane_cmd],
                 check=True,
             )
         except FileNotFoundError:
