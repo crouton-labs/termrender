@@ -1,6 +1,23 @@
 # CHANGELOG
 
 
+## v0.2.1 (2026-04-05)
+
+### Bug Fixes
+
+- **mermaid**: Undo double-encoded UTF-8 from mermaid-ascii output
+  ([`9e0560c`](https://github.com/CaptainCrouton89/termrender/commit/9e0560ce46b6dc3f90d2d716a97780713e5e5e53))
+
+mermaid-ascii misinterprets UTF-8 bytes as Latin-1 and re-encodes, corrupting multi-byte characters
+  (e.g. → renders as â<U+0086><U+0092>). Apply latin-1 round-trip to recover original UTF-8 in both
+  layout and renderer subprocess call sites.
+
+### Documentation
+
+- Add tmux pane lifecycle and --check interaction notes to CLAUDE.md
+  ([`9400092`](https://github.com/CaptainCrouton89/termrender/commit/9400092e507d470acb97ac5a17b66fcf0e9aa2f6))
+
+
 ## v0.2.0 (2026-04-05)
 
 ### Bug Fixes
