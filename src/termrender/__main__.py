@@ -6,44 +6,92 @@ import sys
 
 from termrender import render, TerminalError, DirectiveError
 
-__version__ = "0.1.0"
+# Exit codes — agents can branch on these without parsing stderr.
+EXIT_OK = 0
+EXIT_INPUT = 1       # no input, bad file, usage error
+EXIT_SYNTAX = 2      # directive syntax error (malformed/unclosed/stray)
+EXIT_TERMINAL = 3    # terminal does not support required capabilities
+
+try:
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("termrender")
+except Exception:
+    __version__ = "dev"
 
 _EPILOG = """\
-directives:
-  :::panel{title="T" color="c"}   Bordered box with title and color
-  :::columns                       Side-by-side column layout
-    :::col{width="50%"}            Column within :::columns (width in %)
-  :::tree{color="c"}               Tree with guide lines (indent = nesting)
-  :::callout{type="info"}          Callout box (info, warning, error, success)
-  :::quote{author="A"}             Styled block quote with attribution
-  :::code{lang="python"}           Code block with syntax highlighting
-  :::divider{label="L"}            Horizontal rule with optional label
-  ```mermaid                       Mermaid flowchart (rendered via mermaid-ascii)
+directives (close each with :::):
+  :::panel{title="T" color="c"}     Bordered box
+      attrs: title (string), color (red|green|yellow|blue|magenta|cyan|white|gray)
+  :::columns                         Side-by-side column layout container
+    :::col{width="50%"}              Column within :::columns
+        attrs: width (percent string, e.g. "40%")
+  :::tree{color="c"}                 Tree with Unicode guide lines
+      attrs: color (same palette as panel). Body: indented lines = nesting.
+  :::callout{type="info"}            Callout box with status icon
+      attrs: type (info|warning|error|success)
+  :::quote{author="A"}               Styled block quote
+      attrs: author or by (string)
+  :::code{lang="python"}             Code block with syntax highlighting
+      attrs: lang (any Pygments lexer name)
+  :::divider{label="L"}              Horizontal rule (self-closing, no :::)
+      attrs: label (centered text)
+  ```mermaid ... ```                  Mermaid diagram (via mermaid-ascii)
 
-  Directives nest arbitrarily. Close with :::
+nesting:
+  Directives nest arbitrarily. Every opener needs a matching :::
+  except :::divider which is self-closing.
+
+  :::panel{title="Outer"}
+  :::callout{type="info"}
+  Nested content here.
+  :::
+  :::
 
 markup:
-  Standard markdown: # headings, **bold**, *italic*, `code`,
-  - bullet lists, 1. numbered lists, ```lang fenced code blocks
+  # heading    **bold**    *italic*    `code`
+  - bullet     1. numbered    ```lang fenced code
+  | col | col | (GFM tables)
+
+colors:
+  red, green, yellow, blue, magenta, cyan, white, gray
 
 environment:
-  NO_COLOR        Set to any value to disable color output
-  TERM=dumb       Raises an error (Unicode rendering not supported)
+  NO_COLOR           Disable all ANSI color codes
+  TERM=dumb          Unsupported — exits with code 3
+  TERMRENDER_CJK=1   Treat ambiguous-width Unicode as double-width
+
+exit codes:
+  0  success
+  1  input error (no input, bad file)
+  2  syntax error (malformed directive)
+  3  terminal capability error
 
 examples:
-  termrender doc.md                Render a file to the terminal
-  termrender doc.md --width 100    Render at 100 columns wide
-  termrender doc.md --no-color     Render without ANSI colors
+  termrender doc.md                Render a file
+  termrender doc.md -w 100         Render at 100 columns
+  termrender --check doc.md        Validate syntax without rendering
   cat doc.md | termrender          Render from stdin
   echo '# Hello' | termrender     Quick inline render
 
-  termrender <<'EOF'               Render a panel with a list
+  termrender --tmux doc.md            Render in a new tmux side pane
+  termrender <<'EOF'
   :::panel{title="Status" color="green"}
   - All systems operational
   - Last deploy: 2 hours ago
   :::
   EOF
 """
+
+
+def _error(msg: str, *, fix: str | None = None, hint: str | None = None,
+           code: int = EXIT_INPUT) -> None:
+    """Print a structured error to stderr and exit."""
+    print(f"termrender: {msg}", file=sys.stderr)
+    if fix:
+        print(f"  Fix: {fix}", file=sys.stderr)
+    if hint:
+        print(f"  Hint: {hint}", file=sys.stderr)
+    sys.exit(code)
 
 
 def main() -> None:
@@ -59,24 +107,34 @@ def main() -> None:
         type=argparse.FileType("r"),
         default=None,
         metavar="FILE",
-        help="markdown file to render (default: read from stdin)",
+        help="markdown file to render (default: stdin)",
     )
     parser.add_argument(
         "-w", "--width",
         type=int,
         default=None,
         metavar="COLS",
-        help="output width in columns (default: auto-detect terminal width)",
+        help="output width in columns (default: auto-detect)",
     )
     parser.add_argument(
         "--no-color",
         action="store_true",
-        help="strip ANSI color codes from output (same as NO_COLOR=1)",
+        help="strip ANSI codes (same as NO_COLOR=1)",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="validate directive syntax without rendering (exit 0 if valid, 2 if errors)",
     )
     parser.add_argument(
         "--cjk",
         action="store_true",
-        help="treat ambiguous-width Unicode characters as double-width (for CJK terminals)",
+        help="treat ambiguous-width Unicode as double-width (CJK terminals)",
+    )
+    parser.add_argument(
+        "--tmux",
+        action="store_true",
+        help="open rendered output in a new tmux side pane (requires tmux)",
     )
     parser.add_argument(
         "-V", "--version",
@@ -89,23 +147,102 @@ def main() -> None:
     infile = args.file if args.file is not None else sys.stdin
     if infile is sys.stdin and sys.stdin.isatty():
         parser.print_help(sys.stderr)
-        print("\ntermrender: no input (provide a file or pipe markdown to stdin)", file=sys.stderr)
-        sys.exit(1)
+        _error(
+            "no input provided",
+            fix="provide a FILE argument or pipe markdown to stdin",
+            hint="termrender doc.md  OR  echo '# Hi' | termrender",
+        )
 
     source = infile.read()
 
     if args.cjk:
         os.environ["TERMRENDER_CJK"] = "1"
 
+    # --tmux: render in a new tmux side pane
+    if args.tmux:
+        import shlex
+        import subprocess
+        import tempfile
+
+        if not os.environ.get("TMUX"):
+            _error("not inside a tmux session",
+                   fix="run inside tmux or omit --tmux")
+
+        # Save source so the new pane can render it with its own width
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", prefix="termrender-", delete=False,
+        ) as f:
+            f.write(source)
+            tmpfile = f.name
+
+        # Rebuild command without --tmux to avoid recursion
+        cmd_parts = ["termrender", shlex.quote(tmpfile)]
+        if args.no_color:
+            cmd_parts.append("--no-color")
+        if args.cjk:
+            cmd_parts.append("--cjk")
+        if args.width:
+            cmd_parts.extend(["-w", str(args.width)])
+
+        pane_cmd = " ".join(cmd_parts) + " | less -R; rm -f " + shlex.quote(tmpfile)
+
+        try:
+            subprocess.run(
+                ["tmux", "split-window", "-h", pane_cmd],
+                check=True,
+            )
+        except FileNotFoundError:
+            os.unlink(tmpfile)
+            _error("tmux not found", fix="install tmux or omit --tmux")
+        except subprocess.CalledProcessError:
+            os.unlink(tmpfile)
+            _error("failed to create tmux pane",
+                   hint="check that tmux is running and has space for a new pane")
+
+        sys.exit(EXIT_OK)
+
+    # --check: validate only, no rendering
+    if args.check:
+        try:
+            from termrender.parser import parse
+            parse(source)
+        except DirectiveError as e:
+            _error(
+                f"syntax error: {e}",
+                fix="check directive openers have matching ::: closers and attribute syntax is key=\"value\"",
+                code=EXIT_SYNTAX,
+            )
+        except ValueError as e:
+            _error(
+                f"nesting error: {e}",
+                fix="reduce directive nesting depth (max 50 levels)",
+                code=EXIT_SYNTAX,
+            )
+        print("ok", file=sys.stderr)
+        sys.exit(EXIT_OK)
+
     try:
         output = render(source, width=args.width, color=not args.no_color)
     except TerminalError as e:
-        print(f"termrender: error: {e}", file=sys.stderr)
-        print("  Hint: use a terminal that supports Unicode, or set TERM appropriately.", file=sys.stderr)
-        sys.exit(1)
+        _error(
+            f"terminal error: {e}",
+            fix="use a terminal that supports Unicode, or unset TERM=dumb",
+            hint="export TERM=xterm-256color",
+            code=EXIT_TERMINAL,
+        )
     except DirectiveError as e:
-        print(f"termrender: syntax error: {e}", file=sys.stderr)
-        sys.exit(1)
+        _error(
+            f"syntax error: {e}",
+            fix="check directive openers have matching ::: closers and attribute syntax is key=\"value\"",
+            hint="run: termrender --check <file> to validate before rendering",
+            code=EXIT_SYNTAX,
+        )
+    except ValueError as e:
+        _error(
+            f"nesting error: {e}",
+            fix="reduce directive nesting depth (max 50 levels)",
+            code=EXIT_SYNTAX,
+        )
 
     sys.stdout.write(output)
 
