@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 
 from termrender.blocks import Block, BlockType
+from termrender.renderers.mermaid import fix_mermaid_encoding
 from termrender.style import wrap_text, visual_len
 
 
@@ -127,7 +128,7 @@ def resolve_height(block: Block) -> None:
                 check=True,
                 timeout=30,
             )
-            rendered = result.stdout
+            rendered = fix_mermaid_encoding(result.stdout)
         except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
             pass
         block.attrs["_rendered"] = rendered
