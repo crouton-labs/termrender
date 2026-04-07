@@ -37,22 +37,6 @@ class TestVariableColons(unittest.TestCase):
         col_children = [c for c in panel.children if c.type == BlockType.COL]
         self.assertEqual(len(col_children), 1)
 
-    def test_same_colon_nesting_backward_compat(self):
-        """Existing :::panel > :::col nesting still works via depth counter."""
-        source = (
-            ":::panel\n"
-            ":::col\n"
-            "inner\n"
-            ":::\n"
-            ":::"
-        )
-        doc = parse(source)
-        self.assertEqual(len(doc.children), 1)
-        panel = doc.children[0]
-        self.assertEqual(panel.type, BlockType.PANEL)
-        col_children = [c for c in panel.children if c.type == BlockType.COL]
-        self.assertEqual(len(col_children), 1)
-
     def test_closer_mismatch_raises_error(self):
         """::::panel closed by ::: raises DirectiveError."""
         source = "::::panel\ncontent\n:::"

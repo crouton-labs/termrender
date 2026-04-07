@@ -320,7 +320,6 @@ def _split_directives(source: str) -> list[dict]:
                     "name": name,
                     "attrs_raw": attrs_raw,
                     "body_lines": [],
-                    "depth": 1,
                     "colon_count": len(colons),
                 }
                 # Self-closing directives (no body content expected)
@@ -334,9 +333,7 @@ def _split_directives(source: str) -> list[dict]:
                 else:
                     stack.append(entry)
             else:
-                # Nested directive — track depth only if colon count matches
-                if len(colons) == stack[-1]["colon_count"]:
-                    stack[-1]["depth"] += 1
+                # Nested directive — always treat as body content
                 stack[-1]["body_lines"].append(line)
             i += 1
             continue
@@ -357,12 +354,8 @@ def _split_directives(source: str) -> list[dict]:
             if close_colon_count != stack[-1]["colon_count"]:
                 # Different colon count — treat as body content
                 stack[-1]["body_lines"].append(line)
-            elif stack[-1]["depth"] > 1:
-                # Closing a nested directive with same colon count
-                stack[-1]["depth"] -= 1
-                stack[-1]["body_lines"].append(line)
             else:
-                # Closing the top-level directive
+                # Closing the open directive
                 entry = stack.pop()
                 segments.append({
                     "type": "directive",

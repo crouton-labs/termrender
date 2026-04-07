@@ -4,13 +4,13 @@ from termrender import render
 from termrender.style import visual_len
 
 SHOWPIECE_INPUT = """\
-:::panel{title="Deploy — api-gateway v3.2.0" color="cyan"}
+:::::::panel{title="Deploy — api-gateway v3.2.0" color="cyan"}
 
 Completed at **14:32 UTC** on `prod-us-east-1`. Health checks passing.
 
-:::columns
-:::col{width="55%"}
-:::panel{title="Services" color="green"}
+::::::columns
+:::::col{width="55%"}
+::::panel{title="Services" color="green"}
 :::tree
 api-gateway/ [x]
   auth/ [x]
@@ -21,65 +21,64 @@ worker-pool/
   scheduler/ [!]
   dead-letter/ [x]
 :::
-:::
-:::
-:::col{width="45%"}
-:::callout{type="success"}
+::::
+:::::
+:::::col{width="45%"}
+::::callout{type="success"}
 6 of 7 services healthy
-:::
+::::
 
-:::callout{type="warning"}
+::::callout{type="warning"}
 scheduler: 83% memory
 GC tuning shipping next release
-:::
+::::
 
 - **p99 latency**: 34ms
 - **error rate**: 0.02%
 - **throughput**: 12.4k req/s
-:::
-:::
+:::::
+::::::
 
-:::divider{label="rollback"}
-:::
+::::divider{label="rollback"}
 
-:::code{lang="bash"}
+::::code{lang="bash"}
 # If p99 exceeds 200ms:
 kubectl rollout undo deployment/api-gateway -n prod
 kubectl rollout status deployment/api-gateway -n prod
-:::
+::::
 
-:::quote{author="deploy-bot"}
+::::quote{author="deploy-bot"}
 Previous stable: v3.1.4 (deployed 2025-03-28)
-:::
-:::
+::::
+:::::::
 """
 
 COLUMNS_TREE_INPUT = """\
-:::columns
-:::col{width="50%"}
+:::::columns
+::::col{width="50%"}
 :::tree
 root/
   a/ [x]
   b/ [!]
   c/
 :::
-:::
-:::col{width="50%"}
+::::
+::::col{width="50%"}
 - item one
 - item two
 - item three
-:::
-:::
+::::
+:::::
 """
 
 PANEL_TREE_INPUT = """\
-:::panel{title="Test"}
+::::panel{title="Test"}
 :::tree
 a/ [x]
 b/ [!]
 c/
 :::
-:::
+::::
 """
 
 

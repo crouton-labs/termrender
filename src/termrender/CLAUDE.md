@@ -10,11 +10,11 @@
 
 `layout.py` imports `fix_mermaid_encoding` from `renderers/mermaid.py` — the only reverse dependency from layout into renderers. Reorganizing `renderers/` must account for this import. The two subprocess call sites differ: layout uses `check=True` (non-zero exit raises `CalledProcessError` → caught → raw source fallback); the renderer omits `check` (non-zero exit silently reads `stdout`, which may be empty or partial). See `renderers/CLAUDE.md` for encoding-fix details.
 
-## Directive nesting: depth counter, not stack entries
+## Directive nesting: outer must have more colons than inner
 
 The parser handles two directive syntaxes through different passes: colon directives (`:::name`) are extracted in pass 1 via regex in `_split_directives`, while backtick fence directives (`` ```{name} ``) are resolved in pass 2 via mistune's AST walk in `_convert_ast`. Both paths funnel through `_directive_to_block` for block construction.
 
-For colon directives, the parser tracks nesting with a `depth` integer inside the top stack entry, not separate stack entries (parser.py:241–306). A closer `:::` only pops the stack when `depth == 1`; otherwise it decrements depth and treats the closer as body content. Consequence: innermost closers appear verbatim in the body of the parent and are re-parsed on the recursive `parse()` call at line 351.
+For colon directives, closers are paired strictly by colon count. A closer whose colon count differs from the open directive's colon count is treated as body content; the recursive `parse()` call inside `_directive_to_block` re-parses it as an inner directive. This matches the standard rule used by MyST, Pandoc fenced divs, markdown-it-container, and CommonMark fenced code blocks: outer fences must use strictly more colons than the inner fences they wrap, making opener/closer pairing unambiguous.
 
 Max recursion depth is 50; exceeding it raises `ValueError`, not `DirectiveError`. Both the render path and `--check` path in `__main__.py` catch `ValueError` and map it to exit code 2 (`EXIT_SYNTAX`).
 
@@ -50,9 +50,23 @@ Max recursion depth is 50; exceeding it raises `ValueError`, not `DirectiveError
 
 ## `--tmux`: exit code reflects pane creation, auto-sizing runs a full render, tempfiles leak
 
-`__main__.py:229`: after `tmux split-window` succeeds the parent exits `EXIT_OK` immediately — the pane renders asynchronously. Render errors surface only inside the pane. `--check` is silently dropped with `--tmux` (exit at line 229 precedes the `--check` branch at line 231). Tempfile cleanup is embedded as `... | less -R; rm -f <tmpfile>` (line 214); `less` killed abnormally (SIGKILL, closed session) leaks `/tmp/termrender-*.md`.
+`__main__.py:357`: after `tmux split-window` succeeds the parent exits `EXIT_OK` immediately — the pane renders asynchronously. Render errors surface only inside the pane. `--check` is silently dropped with `--tmux` (exit at line 357 precedes the `--check` branch at line 368), even though `--tmux` now runs its own `parse()` call (lines 253–266) for fail-fast syntax validation before spawning the pane. The `--check` "ok" message and exit-code contract are not honoured.
 
-When `--width` is omitted, `--tmux` calls `render(source, width=80, color=False)` (lines 177–185) to measure content width — mermaid subprocesses fire and `TERMRENDER_CJK` mutations apply here. Any exception silently falls back to `pane_width=80`. The pane is capped to `tmux #{pane_width} - 10`; if the tmux query fails, no cap is applied. Minimum enforced pane width is 20.
+Tempfile cleanup is embedded as `... | less -R; rm -f <tmpfile>` (line 339); `less` killed abnormally (SIGKILL, closed session) leaks `/tmp/termrender-*.md`. `--tmux --watch` skips tempfile creation entirely — the pane is pointed at the real file path, so no leak.
+
+When `--width` is omitted, `--tmux` calls `render(source, width=80, color=False)` (lines 283–290) to measure content width — mermaid subprocesses fire and `TERMRENDER_CJK` mutations apply here. Any exception silently falls back to `pane_width=80`. The pane is capped to `tmux #{pane_width} - 10`; if the tmux query fails, no cap is applied. Minimum enforced pane width is 20.
+
+## `--watch`: re-renders on resize as well as file change; errors are inline, not fatal
+
+`_watch_loop` (lines 99–169) polls `os.path.getmtime` every 0.2 s and also re-renders when `shutil.get_terminal_size()` changes — so a terminal resize triggers a re-render even with no file edit. `width=None` is passed to `render()` each cycle, so auto-detection always uses current pane width.
+
+The loop catches bare `Exception` (line 142) to keep the watcher alive across render errors; errors appear as a one-line message in the pane, not as an exit. `DirectiveError`, `TerminalError`, and `ValueError` (nesting depth) are each caught separately with distinct prefixes for that same reason — the watcher never exits on render failure, only on `KeyboardInterrupt`.
+
+The alternate screen buffer (`\033[?1049h` / `\033[?1049l`) is entered on start and restored in a `finally` block, so Ctrl+C cleanly returns to the prior terminal state. `--watch` requires a FILE argument; stdin cannot be watched (polled by path, not fd).
+
+## `TERMRENDER_COLOR=1` forces color when stdout is not a tty
+
+`use_color` (lines 361–363 and 388–390) is `True` when stdout is a tty OR `TERMRENDER_COLOR == "1"`. The tmux pane command is prefixed with `TERMRENDER_COLOR=1` (lines 334, 337) so color survives the `| less -R` pipe. Setting this env var in scripts achieves the same effect — it overrides the tty check entirely.
 
 ## `_EMOJI_WIDE_RANGES` must stay sorted by codepoint
 
