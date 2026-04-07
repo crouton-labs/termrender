@@ -74,6 +74,8 @@ examples:
   echo '# Hello' | termrender     Quick inline render
 
   termrender --tmux doc.md            Render in a new tmux side pane
+  termrender --watch doc.md           Live-render in current terminal
+  termrender --tmux --watch doc.md    Live-render in a new tmux side pane
   termrender <<'EOF'
   :::panel{title="Status" color="green"}
   - All systems operational
@@ -92,6 +94,79 @@ def _error(msg: str, *, fix: str | None = None, hint: str | None = None,
     if hint:
         print(f"  Hint: {hint}", file=sys.stderr)
     sys.exit(code)
+
+
+def _watch_loop(file_path: str, *, color: bool, poll_interval: float = 0.2) -> None:
+    """Re-render `file_path` whenever its mtime changes.
+
+    Uses the alternate screen buffer so the prior terminal state is restored
+    on exit. Width is re-detected from the current terminal each render so
+    pane/window resizes are picked up automatically. Render errors are shown
+    inline rather than crashing the watcher — fix the file and save again.
+    """
+    import time
+
+    last_mtime: float | None = None
+    last_size: tuple[int, int] = (0, 0)
+
+    def _draw(body: str, status: str) -> None:
+        # \033[?25l hide cursor, \033[2J clear, \033[H home
+        sys.stdout.write("\033[?25l\033[2J\033[H")
+        sys.stdout.write(body)
+        if not body.endswith("\n"):
+            sys.stdout.write("\n")
+        # Status line at the bottom — dim if color is enabled
+        if color:
+            sys.stdout.write(f"\033[2m{status}\033[0m\n")
+        else:
+            sys.stdout.write(f"{status}\n")
+        sys.stdout.flush()
+
+    def _render_now() -> None:
+        try:
+            with open(file_path, "r") as f:
+                source = f.read()
+        except FileNotFoundError:
+            body = f"termrender: file not found: {file_path}\n"
+        except OSError as e:
+            body = f"termrender: cannot read {file_path}: {e}\n"
+        else:
+            try:
+                body = render(source, width=None, color=color)
+            except DirectiveError as e:
+                body = f"termrender: syntax error: {e}\n"
+            except TerminalError as e:
+                body = f"termrender: terminal error: {e}\n"
+            except ValueError as e:
+                body = f"termrender: nesting error: {e}\n"
+            except Exception as e:  # noqa: BLE001 — keep watcher alive
+                body = f"termrender: render error: {e}\n"
+        _draw(body, f"watching {file_path} — Ctrl+C to exit")
+
+    # Enter alternate screen buffer
+    sys.stdout.write("\033[?1049h")
+    sys.stdout.flush()
+    try:
+        while True:
+            try:
+                mtime = os.path.getmtime(file_path)
+            except FileNotFoundError:
+                mtime = None
+            # Re-render on file change OR terminal resize
+            import shutil as _shutil
+            size = _shutil.get_terminal_size()
+            size_tuple = (size.columns, size.lines)
+            if mtime != last_mtime or size_tuple != last_size:
+                last_mtime = mtime
+                last_size = size_tuple
+                _render_now()
+            time.sleep(poll_interval)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # Show cursor, leave alternate screen buffer
+        sys.stdout.write("\033[?25h\033[?1049l")
+        sys.stdout.flush()
 
 
 def main() -> None:
@@ -137,11 +212,24 @@ def main() -> None:
         help="open rendered output in a new tmux side pane (requires tmux)",
     )
     parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="re-render whenever FILE changes on disk (requires a file argument)",
+    )
+    parser.add_argument(
         "-V", "--version",
         action="version",
         version=f"%(prog)s {__version__}",
     )
     args = parser.parse_args()
+
+    # --watch needs a real file path to poll; stdin can't be watched.
+    if args.watch and args.file is None:
+        _error(
+            "--watch requires a FILE argument",
+            fix="pass a markdown file path; stdin cannot be watched",
+            hint="termrender --watch doc.md",
+        )
 
     # Determine input source
     infile = args.file if args.file is not None else sys.stdin
@@ -213,23 +301,43 @@ def main() -> None:
             pass
         pane_width = max(pane_width, 20)  # absolute minimum
 
-        # Save source so the new pane can render it
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", prefix="termrender-", delete=False,
-        ) as f:
-            f.write(source)
-            tmpfile = f.name
+        # Watch mode points the new pane at the user's real file so edits
+        # propagate; non-watch mode snapshots source into a tempfile.
+        tmpfile: str | None = None
+        if args.watch:
+            # args.file is guaranteed non-None by the earlier --watch check.
+            source_path = args.file.name
+        else:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".md", prefix="termrender-", delete=False,
+            ) as f:
+                f.write(source)
+                tmpfile = f.name
+            source_path = tmpfile
 
         # Rebuild command without --tmux to avoid recursion
-        cmd_parts = ["termrender", shlex.quote(tmpfile)]
+        cmd_parts = ["termrender", shlex.quote(source_path)]
         if args.no_color:
             cmd_parts.append("--no-color")
         if args.cjk:
             cmd_parts.append("--cjk")
-        cmd_parts.extend(["-w", str(pane_width)])
+        if args.watch:
+            # No -w: watcher re-detects pane width per render so resizes
+            # pick up automatically.
+            cmd_parts.append("--watch")
+        else:
+            cmd_parts.extend(["-w", str(pane_width)])
 
-        # TERMRENDER_COLOR=1 forces color on despite stdout piping to less
-        pane_cmd = "TERMRENDER_COLOR=1 " + " ".join(cmd_parts) + " | less -R; rm -f " + shlex.quote(tmpfile)
+        if args.watch:
+            # Watch mode owns the pane (alternate screen buffer); no less,
+            # no tempfile cleanup needed.
+            pane_cmd = "TERMRENDER_COLOR=1 " + " ".join(cmd_parts)
+        else:
+            # TERMRENDER_COLOR=1 forces color on despite stdout piping to less
+            pane_cmd = (
+                "TERMRENDER_COLOR=1 " + " ".join(cmd_parts)
+                + " | less -R; rm -f " + shlex.quote(source_path)
+            )
 
         try:
             subprocess.run(
@@ -237,13 +345,23 @@ def main() -> None:
                 check=True,
             )
         except FileNotFoundError:
-            os.unlink(tmpfile)
+            if tmpfile:
+                os.unlink(tmpfile)
             _error("tmux not found", fix="install tmux or omit --tmux")
         except subprocess.CalledProcessError:
-            os.unlink(tmpfile)
+            if tmpfile:
+                os.unlink(tmpfile)
             _error("failed to create tmux pane",
                    hint="check that tmux is running and has space for a new pane")
 
+        sys.exit(EXIT_OK)
+
+    # --watch: live-render in the current terminal
+    if args.watch:
+        use_color = not args.no_color and (
+            sys.stdout.isatty() or os.environ.get("TERMRENDER_COLOR") == "1"
+        )
+        _watch_loop(args.file.name, color=use_color)
         sys.exit(EXIT_OK)
 
     # --check: validate only, no rendering
