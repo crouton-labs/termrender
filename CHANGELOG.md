@@ -1,6 +1,61 @@
 # CHANGELOG
 
 
+## v0.6.0 (2026-04-07)
+
+### Features
+
+- Add diff, charts, stat, timeline, tasklist, and inline badges
+  ([`e14f615`](https://github.com/CaptainCrouton89/termrender/commit/e14f615ae8d0723405db61c79b0f858d7bf0f863))
+
+New block-level directives: - :::diff — colored unified diff with +/- gutters - :::bar — multi-bar
+  chart with sub-cell precision via eighth blocks - :::progress — single-line progress bar (auto
+  color by ratio) - :::gauge — three-line meter (auto color by load threshold) - :::stat — KPI tile
+  with label, value, trend arrow + delta, caption - :::timeline — vertical event list with bullet
+  markers and connectors - :::tasklist — checkbox list (also auto-detected from any markdown list
+  with [x]/[ ]/[!] markers)
+
+New inline role: - :badge[text]{color=green} — colored pill, reuses new InlineSpan fg/bg fields so
+  future inline roles drop in trivially.
+
+Cross-cutting changes: - InlineSpan gained fg/bg fields; render_spans and span-slicers in text.py
+  and table.py honor them. - _merge_plain_spans coalesces mistune's text fragments before role
+  expansion (mistune splits on `[`, which would otherwise break :badge[...]). - _render_list_item
+  now uses visual_len(prefix) so styled checkbox prefixes don't break indent math. - STAT joins
+  PANEL/CALLOUT/CODE in the border-aware width path. - progress and gauge added to
+  _SELF_CLOSING_DIRECTIVES (atomic, no body); stat requires an explicit closer so it can hold a
+  caption.
+
+63 new tests across six test files. All 94 tests pass.
+
+- **cli**: Add --watch mode for live re-rendering
+  ([`4223ad8`](https://github.com/CaptainCrouton89/termrender/commit/4223ad86805b0b3ad45450bd7ca4441a668f0e23))
+
+Re-renders the file whenever its mtime changes, with terminal-resize detection and inline error
+  display so the watcher survives malformed input. Uses the alternate screen buffer so Ctrl+C
+  cleanly restores the prior terminal state.
+
+Composes with --tmux: --tmux --watch points the spawned pane at the real file path (skipping the
+  tempfile path) so the live loop runs inside the side pane.
+
+### Refactoring
+
+- **parser**: Require strictly more colons on outer fences
+  ([`4a501d9`](https://github.com/CaptainCrouton89/termrender/commit/4a501d917db191f758874bb6c3d922c879a763be))
+
+Drops the depth-counter that allowed `:::outer ... :::inner ... ::: ... :::` nesting with same colon
+  counts. Termrender now matches the standard followed by MyST, Pandoc fenced divs,
+  markdown-it-container, and CommonMark fenced code blocks: an opener can only nest inside another
+  directive if its colon count is strictly less than the outer's.
+
+A closer with a non-matching colon count is treated as body content and falls through to the
+  recursive parse(), which is what makes nested directives work in the first place.
+
+Fixtures in test_column_alignment.py rewritten to ascending colon counts (7/6/5/4/3 for the
+  showpiece, 5/4/3 for columns_tree, 4/3 for panel_tree). test_same_colon_nesting_backward_compat
+  deleted — its behavior is no longer supported.
+
+
 ## v0.5.0 (2026-04-06)
 
 ### Features
