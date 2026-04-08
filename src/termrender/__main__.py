@@ -334,7 +334,9 @@ def main() -> None:
                 except (subprocess.CalledProcessError, ValueError, FileNotFoundError):
                     _error(
                         f"could not query tmux pane {args.pane}",
-                        fix="check that the pane id is valid (e.g. %23)",
+                        fix="the pane may have been closed. "
+                            "List active panes with: tmux list-panes -F '#{pane_id}'  "
+                            "Or spawn a fresh one with: termrender --tmux <file>",
                     )
             pane_width = max(pane_width, 20)
         else:
@@ -431,7 +433,8 @@ def main() -> None:
             if args.pane:
                 _error(
                     f"failed to update tmux pane {args.pane}",
-                    hint="check that the pane id is still valid",
+                    fix="the pane may have been closed. Spawn a fresh one with: "
+                        "termrender --tmux <file>",
                 )
             else:
                 _error("failed to create tmux pane",
