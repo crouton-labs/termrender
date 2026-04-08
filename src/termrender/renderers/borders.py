@@ -30,6 +30,25 @@ def render_box(
     dash_v = visual_len("─")
     corner_v = visual_len("┌")  # same as ┐, └, ┘
 
+    # Grow the box if any content line (or the title) won't fit at the
+    # requested width. mermaid-ascii's --maxWidth is non-strict, so a child
+    # mermaid block can return lines wider than its allocated content area.
+    # Truncating would corrupt the diagram; growing keeps the box's top,
+    # bottom, and side borders aligned at the same column even if it
+    # overflows the parent's allocation.
+    content_max = visual_len("")
+    for cl in content_lines:
+        cl_w = visual_len(cl)
+        if cl_w > content_max:
+            content_max = cl_w
+    required_for_content = content_max + 2 + 2 * border_v  # pads + walls
+    required_for_title = 0
+    if title:
+        title_part_w = dash_v + 2 + visual_len(title)  # "─ TITLE "
+        # Reserve at least one trailing dash so the corner has chrome.
+        required_for_title = title_part_w + dash_v + 2 * border_v
+    width = max(width, required_for_content, required_for_title)
+
     # inner_w = space between the two vertical borders
     inner_w = width - 2 * border_v
     # content_w = space for actual content (inner minus 1-space padding each side)
