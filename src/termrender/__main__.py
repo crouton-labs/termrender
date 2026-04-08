@@ -19,7 +19,7 @@ except Exception:
     __version__ = "dev"
 
 _EPILOG = """\
-directives (close each with :::):
+directives (close each with a matching colon count):
   :::panel{title="T" color="c"}     Bordered box
       attrs: title (string), color (red|green|yellow|blue|magenta|cyan|white|gray)
   :::columns                         Side-by-side column layout container
@@ -33,19 +33,48 @@ directives (close each with :::):
       attrs: author or by (string)
   :::code{lang="python"}             Code block with syntax highlighting
       attrs: lang (any Pygments lexer name)
-  :::divider{label="L"}              Horizontal rule (self-closing, no :::)
+  :::divider{label="L"}              Horizontal rule (top-level self-closing)
       attrs: label (centered text)
+  :::stat{label="L" value="V" delta="D"}
+                                     KPI tile — label + big value + trend arrow
+      attrs: label, value, delta (e.g. "-12%"), trend=up|down|flat
+  :::bar{title="T" color="c"}        Multi-bar horizontal chart
+      body: one "label: value" per line
+  :::progress{value=70 max=100 label="L"}
+                                     Single-line progress bar (top-level self-closing)
+      attrs: value, max, label, color (auto by ratio if unset)
+  :::gauge{value=88 max=100 label="L" unit="%"}
+                                     3-line meter — label, bar, readout (top-level self-closing)
+      attrs: value, max, label, unit, color (auto by load if unset)
+  :::diff{title="T"}                 Colored unified diff (+green / -red / @magenta)
+      attrs: title (defaults to "diff")
+  :::timeline{title="T" color="c"}   Vertical event timeline
+      body: one "- date: event" per line (| also works as separator)
+  :::tasklist                        Checkbox list — [x] checked, [ ] unchecked, [!] in-progress
+      Plain lists with at least one marker auto-promote; use the directive
+      to force unchecked styling on items without explicit markers.
   ```mermaid ... ```                  Mermaid diagram (via mermaid-ascii)
 
-nesting:
-  Directives nest arbitrarily. Every opener needs a matching :::
-  except :::divider which is self-closing.
+  Inline:
+  :badge[text]{color=c}              Inline pill badge
+      colors: red|green|yellow|blue|magenta|cyan|gray (default blue)
 
-  :::panel{title="Outer"}
-  :::callout{type="info"}
-  Nested content here.
+nesting:
+  Outer fences must use STRICTLY MORE colons than the inner fences they
+  wrap. Closers are paired by colon count; a wrong-count closer is silently
+  re-parsed as body content. Use --check to validate.
+
+  ::::columns          ← 4 colons (outer)
+  :::col{width="50%"}  ← 3 colons (inner)
+  Left content.
   :::
+  :::col{width="50%"}
+  Right content.
   :::
+  ::::
+
+  divider, progress, and gauge are self-closing ONLY at the top level —
+  nested inside another directive they need an explicit closer.
 
 markup:
   # heading    **bold**    *italic*    `code`
@@ -76,6 +105,12 @@ examples:
   termrender --tmux doc.md            Render in a new tmux side pane
   termrender --watch doc.md           Live-render in current terminal
   termrender --tmux --watch doc.md    Live-render in a new tmux side pane
+
+  # Synchronous pane updates: spawn once, then re-render in place.
+  # --tmux prints the new pane id; pass it back via --pane on subsequent calls.
+  PANE=$(termrender --tmux doc.md)
+  termrender --pane "$PANE" doc.md   # update the same pane after edits
+
   termrender <<'EOF'
   :::panel{title="Status" color="green"}
   - All systems operational
@@ -209,7 +244,13 @@ def main() -> None:
     parser.add_argument(
         "--tmux",
         action="store_true",
-        help="open rendered output in a new tmux side pane (requires tmux)",
+        help="open rendered output in a new tmux side pane (requires tmux). Prints the new pane id to stdout",
+    )
+    parser.add_argument(
+        "--pane",
+        metavar="ID",
+        default=None,
+        help="tmux pane id to update in place (e.g. %%23) instead of spawning a new pane. Implies --tmux",
     )
     parser.add_argument(
         "--watch",
@@ -222,6 +263,10 @@ def main() -> None:
         version=f"%(prog)s {__version__}",
     )
     args = parser.parse_args()
+
+    # --pane implies --tmux (it's only meaningful in a tmux session)
+    if args.pane:
+        args.tmux = True
 
     # --watch needs a real file path to poll; stdin can't be watched.
     if args.watch and args.file is None:
@@ -274,32 +319,51 @@ def main() -> None:
                    fix="run inside tmux or omit --tmux")
 
         # Determine desired pane width
-        if args.width:
-            pane_width = args.width
+        if args.pane:
+            # Updating an existing pane: use its current width unless overridden.
+            # No measurement / capping pass — the pane is already sized.
+            if args.width:
+                pane_width = args.width
+            else:
+                try:
+                    result = subprocess.run(
+                        ["tmux", "display-message", "-p", "-t", args.pane, "#{pane_width}"],
+                        capture_output=True, text=True, check=True,
+                    )
+                    pane_width = int(result.stdout.strip())
+                except (subprocess.CalledProcessError, ValueError, FileNotFoundError):
+                    _error(
+                        f"could not query tmux pane {args.pane}",
+                        fix="check that the pane id is valid (e.g. %23)",
+                    )
+            pane_width = max(pane_width, 20)
         else:
-            # Preview render to measure content width
-            from termrender.style import visual_len
-            try:
-                preview = render(source, width=80, color=False)
-                max_w = max(
-                    (visual_len(line) for line in preview.split('\n') if line),
-                    default=40,
-                )
-                pane_width = max(max_w, 40)
-            except Exception:
-                pane_width = 80
+            if args.width:
+                pane_width = args.width
+            else:
+                # Preview render to measure content width
+                from termrender.style import visual_len
+                try:
+                    preview = render(source, width=80, color=False)
+                    max_w = max(
+                        (visual_len(line) for line in preview.split('\n') if line),
+                        default=40,
+                    )
+                    pane_width = max(max_w, 40)
+                except Exception:
+                    pane_width = 80
 
-        # Cap to available tmux space (leave room for the source pane)
-        try:
-            result = subprocess.run(
-                ["tmux", "display-message", "-p", "#{pane_width}"],
-                capture_output=True, text=True, check=True,
-            )
-            available = int(result.stdout.strip())
-            pane_width = min(pane_width, available - 10)
-        except Exception:
-            pass
-        pane_width = max(pane_width, 20)  # absolute minimum
+            # Cap to available tmux space (leave room for the source pane)
+            try:
+                result = subprocess.run(
+                    ["tmux", "display-message", "-p", "#{pane_width}"],
+                    capture_output=True, text=True, check=True,
+                )
+                available = int(result.stdout.strip())
+                pane_width = min(pane_width, available - 10)
+            except Exception:
+                pass
+            pane_width = max(pane_width, 20)  # absolute minimum
 
         # Watch mode points the new pane at the user's real file so edits
         # propagate; non-watch mode snapshots source into a tempfile.
@@ -340,10 +404,23 @@ def main() -> None:
             )
 
         try:
-            subprocess.run(
-                ["tmux", "split-window", "-h", "-f", "-l", str(pane_width), pane_cmd],
-                check=True,
-            )
+            if args.pane:
+                # respawn-pane -k kills the existing process in the target
+                # pane and runs the new command. The pane id stays the same.
+                subprocess.run(
+                    ["tmux", "respawn-pane", "-k", "-t", args.pane, pane_cmd],
+                    check=True,
+                )
+                pane_id = args.pane
+            else:
+                # -P -F prints the new pane's id to stdout so the caller
+                # can capture it for subsequent --pane updates.
+                result = subprocess.run(
+                    ["tmux", "split-window", "-h", "-f", "-l", str(pane_width),
+                     "-P", "-F", "#{pane_id}", pane_cmd],
+                    check=True, capture_output=True, text=True,
+                )
+                pane_id = result.stdout.strip()
         except FileNotFoundError:
             if tmpfile:
                 os.unlink(tmpfile)
@@ -351,9 +428,17 @@ def main() -> None:
         except subprocess.CalledProcessError:
             if tmpfile:
                 os.unlink(tmpfile)
-            _error("failed to create tmux pane",
-                   hint="check that tmux is running and has space for a new pane")
+            if args.pane:
+                _error(
+                    f"failed to update tmux pane {args.pane}",
+                    hint="check that the pane id is still valid",
+                )
+            else:
+                _error("failed to create tmux pane",
+                       hint="check that tmux is running and has space for a new pane")
 
+        # Echo the pane id so callers can chain --pane updates
+        print(pane_id)
         sys.exit(EXIT_OK)
 
     # --watch: live-render in the current terminal

@@ -27,8 +27,8 @@ class TestTasklist(unittest.TestCase):
     def test_renders_checkboxes(self):
         src = "- [x] done\n- [ ] todo\n- [!] in progress\n"
         output = render(src, width=40, color=False)
-        self.assertIn("☑", output)  # checked
-        self.assertIn("☐", output)  # unchecked
+        self.assertIn("●", output)  # checked
+        self.assertIn("○", output)  # unchecked
         self.assertIn("◐", output)  # pending
 
     def test_tasklist_directive_alias(self):
@@ -45,7 +45,7 @@ class TestTasklist(unittest.TestCase):
         src = ":::tasklist\n- foo\n- bar\n:::"
         output = render(src, width=40, color=False)
         # Both items should render as unchecked
-        self.assertEqual(output.count("☐"), 2)
+        self.assertEqual(output.count("○"), 2)
 
     def test_visual_widths_match(self):
         src = "- [x] done\n- [ ] todo\n"

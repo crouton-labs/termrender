@@ -104,10 +104,10 @@ def _render_heading(block: Block, color: bool) -> list[str]:
 def _task_prefix(item: Block, color: bool) -> str:
     """Build a checkbox prefix for a list item with `checked`/`pending` attrs."""
     if item.attrs.get("checked"):
-        return style("☑ ", color="green", enabled=color)
+        return style("● ", color="green", enabled=color)
     if item.attrs.get("pending"):
         return style("◐ ", color="yellow", enabled=color)
-    return style("☐ ", dim=True, enabled=color)
+    return style("○ ", dim=True, enabled=color)
 
 
 def _render_list(block: Block, color: bool) -> list[str]:
