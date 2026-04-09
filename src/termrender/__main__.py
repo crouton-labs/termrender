@@ -343,28 +343,17 @@ def main() -> None:
             if args.width:
                 pane_width = args.width
             else:
-                # Preview render to measure content width
-                from termrender.style import visual_len
+                # Default: 1/3 of window width (minus separator)
                 try:
-                    preview = render(source, width=80, color=False)
-                    max_w = max(
-                        (visual_len(line) for line in preview.split('\n') if line),
-                        default=40,
+                    result = subprocess.run(
+                        ["tmux", "display-message", "-p", "#{window_width}"],
+                        capture_output=True, text=True, check=True,
                     )
-                    pane_width = max(max_w, 40)
+                    window_width = int(result.stdout.strip())
+                    pane_width = (window_width - 2) // 3
                 except Exception:
-                    pane_width = 80
+                    pane_width = 60
 
-            # Cap to available tmux space (leave room for the source pane)
-            try:
-                result = subprocess.run(
-                    ["tmux", "display-message", "-p", "#{pane_width}"],
-                    capture_output=True, text=True, check=True,
-                )
-                available = int(result.stdout.strip())
-                pane_width = min(pane_width, available - 10)
-            except Exception:
-                pass
             pane_width = max(pane_width, 20)  # absolute minimum
 
         # Watch mode points the new pane at the user's real file so edits
