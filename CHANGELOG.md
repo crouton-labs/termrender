@@ -1,6 +1,17 @@
 # CHANGELOG
 
 
+## v0.7.2 (2026-04-09)
+
+### Bug Fixes
+
+- **cli**: Default --tmux pane to 1/3 window width
+  ([`d9c1bcc`](https://github.com/CaptainCrouton89/termrender/commit/d9c1bccbe95a4e5cf1f975b82cbafde6d9d3807a))
+
+Instead of preview-rendering at 80 cols to measure content width, default to (window_width - 2) // 3
+  for a consistent 1/3 split.
+
+
 ## v0.7.1 (2026-04-08)
 
 ### Bug Fixes
