@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v0.7.3 (2026-04-15)
+
+### Bug Fixes
+
+- **code**: Wrap long code lines to fit layout width
+  ([`31c6e59`](https://github.com/CaptainCrouton89/termrender/commit/31c6e595a438c4ced8c61fff679b59d4ae55f938))
+
+Code blocks previously used raw line count for height and let render_box grow beyond the layout
+  allocation. Now wraps source lines to the available content width in both layout and renderer.
+
+- **parser**: Add directive trace and file-absolute line numbers to error messages
+  ([`0f99ea0`](https://github.com/CaptainCrouton89/termrender/commit/0f99ea0310116f8fa06e933cd26126246d7a3b43))
+
+Stray-closer and unclosed-directive errors now print the full open/close trace and, when nested
+  directives share a colon count, name the specific cause and suggest the fix. Recursive body
+  parsing reports file-absolute line numbers via _line_offset threading through parse →
+  _split_directives → _directive_to_block.
+
+
 ## v0.7.2 (2026-04-09)
 
 ### Bug Fixes
