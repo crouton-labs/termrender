@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 
 from termrender.blocks import Block, BlockType
-from termrender.renderers.mermaid import fix_mermaid_encoding
+from termrender.renderers.mermaid import fix_mermaid_encoding, preprocess_mermaid_for_ascii
 from termrender.style import wrap_text, visual_len
 
 
@@ -148,7 +148,7 @@ def resolve_height(block: Block) -> None:
         try:
             result = subprocess.run(
                 ["mermaid-ascii", "-f", "-", "-w", str(block.width or 80), "-y", "1"],
-                input=source,
+                input=preprocess_mermaid_for_ascii(source),
                 capture_output=True,
                 text=True,
                 check=True,
