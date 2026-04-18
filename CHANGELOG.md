@@ -1,6 +1,20 @@
 # CHANGELOG
 
 
+## v0.8.0 (2026-04-18)
+
+### Features
+
+- **mermaid**: Preprocess sequence diagrams for mermaid-ascii compatibility
+  ([`a642576`](https://github.com/CaptainCrouton89/termrender/commit/a642576d41d5dbde372d7de2ab47745296a78e32))
+
+mermaid-ascii only parses ->> / -->> arrows, participants, and self-loops; every other common
+  sequence-diagram construct made it fail and fall back to raw source. Rewrite Note lines into
+  self-loops, map -> / -x / --x / -) / --) / -- > onto the supported arrow pair, drop block keywords
+  (loop/alt/activate/ autonumber/end/…), and flatten <br/> to ' / '. Non-sequence diagrams pass
+  through unchanged.
+
+
 ## v0.7.3 (2026-04-15)
 
 ### Bug Fixes
