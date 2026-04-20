@@ -29,7 +29,7 @@ def _render_wrapped_spans(
         prefix = first_prefix if i == 0 else cont_prefix
         lines.append(visual_ljust(prefix + styled, total_width))
         char_offset += line_len
-        if char_offset < len(plain) and plain[char_offset] == " ":
+        if char_offset < len(plain) and plain[char_offset] in (" ", "\n"):
             char_offset += 1
 
     return lines

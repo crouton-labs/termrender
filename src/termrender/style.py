@@ -219,10 +219,17 @@ def visual_center(s: str, width: int, fillchar: str = ' ') -> str:
 
 
 def wrap_text(text: str, width: int) -> list[str]:
-    if not text or text.isspace():
+    if not text:
+        return ['']
+    if "\n" in text:
+        result: list[str] = []
+        for seg in text.split("\n"):
+            result.extend(wrap_text(seg, width))
+        return result
+    if text.isspace():
         return ['']
     if width <= 0:
-        return [text] if text else ['']
+        return [text]
     words = text.split(' ')
     lines: list[str] = []
     current = ''
