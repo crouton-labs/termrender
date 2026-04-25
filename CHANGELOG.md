@@ -1,6 +1,18 @@
 # CHANGELOG
 
 
+## v0.9.1 (2026-04-25)
+
+### Bug Fixes
+
+- **timeline**: Wrap event text instead of truncating with ellipsis
+  ([`5af0e04`](https://github.com/crouton-labs/termrender/commit/5af0e04c3256075a2016e2cf8ae3d44e9e78c8fc))
+
+Long event entries previously got clipped with `…` when they exceeded event_w. Now they wrap across
+  multiple lines, with continuation lines indented under the bullet and prefixed by the accent bar.
+  Layout height sums per-entry wrapped line counts so the block reserves the right space.
+
+
 ## v0.9.0 (2026-04-21)
 
 ### Bug Fixes
