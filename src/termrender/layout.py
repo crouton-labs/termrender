@@ -192,9 +192,15 @@ def resolve_height(block: Block) -> None:
     elif bt == BlockType.TIMELINE:
         entries = block.attrs.get("entries", [])
         title_h = 1 if block.attrs.get("title") else 0
-        # Each entry takes 1 line + 1 connector line between entries (none after last)
         if entries:
-            block.height = title_h + len(entries) * 2 - 1
+            date_w = max(visual_len(e["date"]) for e in entries)
+            event_w = max((block.width or 60) - date_w - 4, 5)
+            total = 0
+            for entry in entries:
+                wrapped = wrap_text(entry["event"], event_w) or [""]
+                total += len(wrapped)
+            total += len(entries) - 1  # connector between entries
+            block.height = title_h + total
         else:
             block.height = max(title_h, 1)
 

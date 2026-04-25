@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from termrender.blocks import Block
-from termrender.style import style, visual_len, visual_ljust
+from termrender.style import style, visual_len, visual_ljust, wrap_text
 
 
 def render(block: Block, color: bool, render_child=None) -> list[str]:
@@ -28,18 +28,16 @@ def render(block: Block, color: bool, render_child=None) -> list[str]:
     bar = style("│", color=accent, dim=True, enabled=color)
 
     event_w = max(w - date_w - 4, 5)  # date + space + bullet + space + event
+    cont_indent = " " * (date_w + 1)
 
     for i, entry in enumerate(entries):
         date_text = entry["date"].rjust(date_w)
         date_styled = style(date_text, dim=True, enabled=color)
-        event_text = entry["event"]
-        if visual_len(event_text) > event_w:
-            event_text = event_text[: max(event_w - 1, 0)] + "…"
-        line = f"{date_styled} {bullet} {event_text}"
-        lines.append(visual_ljust(line, w))
+        wrapped = wrap_text(entry["event"], event_w) or [""]
+        lines.append(visual_ljust(f"{date_styled} {bullet} {wrapped[0]}", w))
+        for cont in wrapped[1:]:
+            lines.append(visual_ljust(f"{cont_indent}{bar} {cont}", w))
         if i < len(entries) - 1:
-            connector_indent = " " * (date_w + 1)
-            connector = f"{connector_indent}{bar}"
-            lines.append(visual_ljust(connector, w))
+            lines.append(visual_ljust(f"{cont_indent}{bar}", w))
 
     return lines
