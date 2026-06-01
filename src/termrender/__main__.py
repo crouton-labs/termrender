@@ -59,6 +59,23 @@ Branches
   render  render markdown to ANSI and print to stdout   | use when producing output for display
   check   validate directive syntax without rendering    | use when validating before rendering
   watch   live-render a file, updating on every save     | use when monitoring a file interactively
+
+Document format
+  Directive-flavored markdown. Triple-colon blocks carry attributes in {} and
+  nest arbitrarily; every block closes with a bare `:::`. Plain markdown
+  (headings, **bold**, *italic*, `code`, bullet/numbered lists) works
+  everywhere, including inside directives. Write structure, not box-drawing —
+  layout, padding, and guide lines are computed.
+
+  :::panel{title="" color=""}            bordered box; color e.g. green|cyan|red
+  :::columns / :::col{width="N%"}        side-by-side; col widths sum to 100%
+  :::tree{color=""}                      indentation → Unicode guide lines;
+                                         [x]=done [!]=warning status markers
+  :::callout{type=""}                     admonition; type success|warning|error|info
+  :::divider{label=""}                    labeled horizontal rule
+  :::code{lang=""}                        syntax-highlighted block (``` fences also work)
+  :::quote{author=""}                     attributed block quote
+  :::mermaid                             flowchart → ASCII (NOT ```mermaid fences)
 """
 
 _DOC_RENDER_HELP = """\
