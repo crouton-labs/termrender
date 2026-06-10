@@ -332,3 +332,39 @@ def test_doc_render_rejects_unknown_flag():
     assert r.returncode == 1
     out = json.loads(r.stdout)
     assert out["error"] == "bad_invocation"
+
+
+# ---------------------------------------------------------------------------
+# Pane command construction — must use an absolute termrender invocation, not a
+# bare PATH-resolved name (a venv-only install is not on a spawned pane's PATH).
+# ---------------------------------------------------------------------------
+
+def test_build_pane_cmd_uses_absolute_invocation(monkeypatch, tmp_path):
+    import termrender.__main__ as m
+
+    fake = tmp_path / "termrender"
+    fake.write_text("#!/bin/sh\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(sys, "argv", [str(fake)])
+
+    watch_cmd = m._build_pane_cmd(
+        watch=True, path="/docs/a.md", cjk=False, pane_width=None, tmpfile=None,
+    )
+    assert str(fake.resolve()) in watch_cmd
+    assert watch_cmd.startswith(str(fake.resolve()) + " ")  # absolute, not bare
+    assert " doc watch " in watch_cmd
+
+    render_cmd = m._build_pane_cmd(
+        watch=False, path="/docs/a.md", cjk=False, pane_width=80, tmpfile="/tmp/x.md",
+    )
+    assert str(fake.resolve()) in render_cmd
+    assert " doc render " in render_cmd
+
+
+def test_termrender_invocation_falls_back_to_python_m(monkeypatch):
+    import termrender.__main__ as m
+
+    monkeypatch.setattr(sys, "argv", [""])
+    inv = m._termrender_invocation()
+    assert "-m termrender" in inv
+    assert sys.executable in inv

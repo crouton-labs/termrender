@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any, NoReturn
 
 from termrender import render, TerminalError, DirectiveError
@@ -342,6 +343,27 @@ def _cmd_doc_watch(args: argparse.Namespace) -> None:
     sys.exit(EXIT_OK)
 
 
+def _termrender_invocation() -> str:
+    """Shell-quoted command prefix that invokes *this* termrender.
+
+    A tmux pane spawned via split-window/respawn-pane resolves a bare
+    ``termrender`` token through ``$PATH``. When termrender lives only inside a
+    managed venv (e.g. invoked by absolute path), that bare name is not on PATH
+    and the spawned pane dies instantly and silently. Prefer the absolute path
+    of the running entrypoint (argv[0]) so the pane invokes the same binary;
+    fall back to ``python -m termrender`` when argv[0] is not a usable
+    executable.
+    """
+    import shlex
+
+    argv0 = sys.argv[0] if sys.argv else ""
+    if argv0:
+        entry = Path(argv0).resolve()
+        if entry.is_file() and os.access(entry, os.X_OK):
+            return shlex.quote(str(entry))
+    return f"{shlex.quote(sys.executable)} -m termrender"
+
+
 def _build_pane_cmd(
     *,
     watch: bool,
@@ -354,17 +376,18 @@ def _build_pane_cmd(
     import shlex
 
     cjk_flag = " --cjk" if cjk else ""
+    termrender = _termrender_invocation()
 
     if watch:
         # doc watch reads path as positional; use -- to guard against flag-looking paths
-        cmd = f"termrender doc watch --color on{cjk_flag} -- {shlex.quote(path)}"
+        cmd = f"{termrender} doc watch --color on{cjk_flag} -- {shlex.quote(path)}"
     else:
         effective_path = tmpfile if tmpfile else path
         width_flag = f" --width {pane_width}" if pane_width is not None else ""
         # doc render reads stdin — cat the file into it
         cmd = (
             f"cat {shlex.quote(effective_path)}"
-            f" | termrender doc render --color on{width_flag}{cjk_flag}"
+            f" | {termrender} doc render --color on{width_flag}{cjk_flag}"
             f" | less -R; rm -f {shlex.quote(effective_path)}"
         )
     return cmd
