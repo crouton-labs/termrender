@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v3.0.1 (2026-06-10)
+
+### Bug Fixes
+
+- Spawn tmux render pane via absolute termrender path, not bare PATH name
+  ([`993c646`](https://github.com/crouton-labs/termrender/commit/993c6463afc64b94b6dbbdbe6e69f7652feac500))
+
+The tmux pane command baked a bare `termrender` token into split-window/ respawn-pane, so the
+  spawned pane resolved it via $PATH. A venv-only install (invoked by absolute path, not on PATH)
+  produced a pane that died instantly and silently. Build the pane command from termrender's own
+  absolute invocation (argv[0] when executable, else `python -m termrender`).
+
+
 ## v3.0.0 (2026-05-18)
 
 ### Chores
