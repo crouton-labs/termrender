@@ -63,13 +63,15 @@ Branches
 
 Document format
   Directive-flavored markdown. Triple-colon blocks carry attributes in {} and
-  nest arbitrarily; every block closes with a bare `:::`. Plain markdown
-  (headings, **bold**, *italic*, `code`, bullet/numbered lists) works
-  everywhere, including inside directives. Write structure, not box-drawing —
-  layout, padding, and guide lines are computed.
+  nest by COLON COUNT: an outer block needs strictly MORE colons than the block
+  nested inside it (::::columns wraps :::col), and each block closes with a bare
+  run of its own colon count on its own line. Plain markdown (headings, **bold**,
+  *italic*, `code`, bullet/numbered lists) works everywhere, including inside
+  directives. Write structure, not box-drawing — layout, padding, and guide
+  lines are computed.
 
   :::panel{title="" color=""}            bordered box; color e.g. green|cyan|red
-  :::columns / :::col{width="N%"}        side-by-side; col widths sum to 100%
+  ::::columns / :::col{width="N%"}       side-by-side; col widths sum to 100%
   :::tree{color=""}                      indentation → Unicode guide lines;
                                          [x]=done [!]=warning status markers
   :::callout{type=""}                     admonition; type success|warning|error|info

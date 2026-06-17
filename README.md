@@ -49,13 +49,13 @@ Here's a realistic example — the kind of thing an LLM agent might produce afte
 The agent writes this:
 
 ```markdown
-:::panel{title="Deploy — api-gateway v3.2.0" color="cyan"}
+:::::::panel{title="Deploy — api-gateway v3.2.0" color="cyan"}
 
 Completed at **14:32 UTC** on `prod-us-east-1`. Health checks passing.
 
-:::columns
-:::col{width="55%"}
-:::panel{title="Services" color="green"}
+::::::columns
+:::::col{width="55%"}
+::::panel{title="Services" color="green"}
 :::tree
 api-gateway/ [x]
   auth/ [x]
@@ -66,23 +66,23 @@ worker-pool/
   scheduler/ [!]
   dead-letter/ [x]
 :::
-:::
-:::
-:::col{width="45%"}
-:::callout{type="success"}
+::::
+:::::
+:::::col{width="45%"}
+::::callout{type="success"}
 6 of 7 services healthy
-:::
+::::
 
-:::callout{type="warning"}
+::::callout{type="warning"}
 scheduler: 83% memory
 GC tuning shipping next release
-:::
+::::
 
 - **p99 latency**: 34ms
 - **error rate**: 0.02%
 - **throughput**: 12.4k req/s
-:::
-:::
+:::::
+::::::
 
 :::divider{label="rollback"}
 :::
@@ -96,7 +96,7 @@ kubectl rollout status deployment/api-gateway -n prod
 :::quote{author="deploy-bot"}
 Previous stable: v3.1.4 (deployed 2025-03-28)
 :::
-:::
+:::::::
 ```
 
 And termrender produces this:
@@ -180,7 +180,7 @@ One function. Source in, ANSI string out.
 
 ## Directives
 
-Triple-colon syntax with optional attributes in curly braces. They nest arbitrarily. Standard markdown works everywhere inside them.
+Triple-colon syntax with optional attributes in curly braces. They nest, but an outer directive must use strictly **more** colons than the one nested inside it (`::::columns` wraps `:::col`) — see [Nesting](#nesting). Standard markdown works everywhere inside them.
 
 ```
 :::name{key="value" key2="value2"}
@@ -218,7 +218,7 @@ Side-by-side layout. Each `:::col` takes a width as a percentage.
 
 **Input:**
 ```markdown
-:::columns
+::::columns
 :::col{width="50%"}
 **Before**
 - Manual deploys
@@ -231,7 +231,7 @@ Side-by-side layout. Each `:::col` takes a width as a percentage.
 - 2 min rollbacks
 - Full staging env
 :::
-:::
+::::
 ```
 
 **Output:**
@@ -399,31 +399,33 @@ The diagram gets rendered as ASCII art inline in the terminal output. Requires `
 
 Directives compose. Put a tree inside a panel, panels inside columns, callouts next to trees with a divider between sections.
 
+**Nesting is by colon count: an outer directive must use strictly more colons than the directive nested inside it, and each block closes with a bare run of its own colon count on its own line.** Below, the panel uses 6 colons, the columns 5, each column 4, and the leaf tree/callout/divider 3. Innermost is always `:::` (3); add one colon per level as you go outward. (`termrender doc check` reports the exact fix when counts are off.)
+
 **Input:**
 ```markdown
-:::panel{title="Deployment" color="green"}
+::::::panel{title="Deployment" color="green"}
 
-:::columns
-:::col{width="60%"}
+:::::columns
+::::col{width="60%"}
 :::tree
 services/
   api/ [x]
   worker/ [x]
   scheduler/ [!]
 :::
-:::
-:::col{width="40%"}
+::::
+::::col{width="40%"}
 :::callout{type="success"}
 2 of 3 services deployed
 :::
-:::
-:::
+::::
+:::::
 
 :::divider{label="logs"}
 :::
 
 Last deploy: `api@v2.4.1` at 14:32 UTC
-:::
+::::::
 ```
 
 A bordered panel containing two columns (file tree on the left, status callout on the right), a labeled divider, and a status line. All from nested directives.
