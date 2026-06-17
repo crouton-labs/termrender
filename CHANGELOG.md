@@ -1,6 +1,38 @@
 # CHANGELOG
 
 
+## v3.0.2 (2026-06-17)
+
+### Bug Fixes
+
+- **docs**: Correct nested-directive examples to increasing-colon rule
+  ([`4332854`](https://github.com/crouton-labs/termrender/commit/4332854cc1bdab8122f7e022c2d79a69e2d8a719))
+
+Every nested example in the README and the doc -h 'Document format' help predated 4a501d9 (require
+  strictly more colons on outer fences) and fails `termrender doc check`: the flagship deploy panel,
+  the Columns example, and the Nesting section all used equal colons. Rewrote them so each outer
+  directive uses strictly more colons than the one nested inside (MyST-style), documented the rule
+  in the intro + Nesting prose + the agent-facing doc help, and added the gotcha to src CLAUDE.md.
+  Rendered output is unchanged (colon count is pure syntax). All 11 README markdown blocks now pass
+  doc check.
+
+- **mermaid**: Normalize flowchart node shapes to rectangles
+  ([`8c45f7c`](https://github.com/crouton-labs/termrender/commit/8c45f7c20810a3960cb037831a7c5f152406b3f6))
+
+mermaid-ascii (vendored, pinned master 6fffb8e) only parses [text] rectangle nodes; every other
+  mermaid node shape leaked raw delimiters or the bare node id into the rendered box — B{Auth?}
+  rendered the literal 'B{Auth?}', E[(Database)] rendered '(Database)'. The preprocessor only
+  handled sequence diagrams; flowcharts passed through untouched.
+
+Add a flowchart shape normalizer that rewrites rhombus {}, cylinder [()], circle (()), stadium ([]),
+  hexagon {{}}, subroutine [[]], and parallelogram/trapezoid [/ /] nodes to id[label], preserving
+  the label text. The backend draws a rectangle regardless, so only the text matters.
+
+Node shapes remain unsupported on current upstream master (parseNode handles only rectangles; the 6
+  commits since our pin are arrow-parsing only), so this is a permanent workaround, not a stopgap
+  for a pin bump. Regression test + CLAUDE.md note added.
+
+
 ## v3.0.1 (2026-06-10)
 
 ### Bug Fixes
