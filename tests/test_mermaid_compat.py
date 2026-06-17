@@ -5,9 +5,45 @@ from termrender.renderers.mermaid import preprocess_mermaid_for_ascii
 
 class TestMermaidPreprocessor(unittest.TestCase):
 
-    def test_non_sequence_diagrams_pass_through(self):
+    def test_unknown_diagram_types_pass_through(self):
+        src = "pie\n    \"A\" : 40\n    \"B\" : 60"
+        self.assertEqual(preprocess_mermaid_for_ascii(src), src)
+
+    def test_flowchart_plain_edges_pass_through(self):
         src = "flowchart TD\n    A-->B\n    B-->C"
         self.assertEqual(preprocess_mermaid_for_ascii(src), src)
+
+    # Regression: mermaid-ascii (pinned master 6fffb8e) only parses ``[text]``
+    # rectangle nodes — every other mermaid node shape leaked its raw delimiters
+    # or bare node id into the rendered box (``B{Auth?}`` rendered the literal
+    # ``B{Auth?}``; ``E[(Database)]`` rendered ``(Database)``). Node shapes are
+    # still unsupported upstream (parseNode only handles rectangles), so we
+    # normalize every shape to ``id[label]`` on our side.
+    def test_flowchart_node_shapes_normalized_to_rectangles(self):
+        src = (
+            "graph LR\n"
+            "    A[Client] --> B{Auth?}\n"
+            "    B -->|Yes| C[Handler]\n"
+            "    C --> E[(Database)]\n"
+            "    F((Circle)) --> G([Stadium])\n"
+            "    G --> H{{Hex}}\n"
+            "    H --> I[[Sub]]\n"
+            "    I --> J[/Para/]"
+        )
+        out = preprocess_mermaid_for_ascii(src)
+        self.assertIn("B[Auth?]", out)
+        self.assertIn("E[Database]", out)
+        self.assertIn("F[Circle]", out)
+        self.assertIn("G[Stadium]", out)
+        self.assertIn("H[Hex]", out)
+        self.assertIn("I[Sub]", out)
+        self.assertIn("J[Para]", out)
+        # Rectangle nodes and edge labels are untouched.
+        self.assertIn("A[Client]", out)
+        self.assertIn("|Yes|", out)
+        # No raw alternate delimiters survive.
+        for leak in ("{Auth?}", "[(", "((", "))", "{{", "}}", "[[", "]]"):
+            self.assertNotIn(leak, out)
 
     def test_note_over_becomes_self_loop(self):
         src = "sequenceDiagram\n    participant A\n    participant B\n    Note over A: hello"

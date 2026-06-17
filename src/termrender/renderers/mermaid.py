@@ -28,6 +28,28 @@ _NOTE_RE = re.compile(
     r"^(\s*)[Nn]ote\s+(?:over|left\s+of|right\s+of)\s+([^:]+?)\s*:\s*(.*)$"
 )
 _BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+
+# Flowchart node-shape normalizers. mermaid-ascii only parses the ``[text]``
+# rectangle form; every other mermaid node shape leaks its raw delimiters (or
+# the node id) into the rendered box — e.g. ``B{Auth?}`` renders the literal
+# ``B{Auth?}`` and ``E[(Database)]`` renders ``(Database)``. Since mermaid-ascii
+# draws every node as a rectangle regardless, we rewrite each alternate shape to
+# ``id[label]``, preserving the label text and dropping only the shape (which
+# the ASCII backend cannot draw anyway). Order matters: multi-char delimiters
+# (``{{``, ``[[``, ``[(``, ``((``, ``([``) must run before their single-char
+# counterparts so the greedy single forms don't bite off half a delimiter.
+_FLOWCHART_SHAPE_SUBS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"(\w+)\{\{(.+?)\}\}"), r"\1[\2]"),        # hexagon {{ }}
+    (re.compile(r"(\w+)\[\[(.+?)\]\]"), r"\1[\2]"),        # subroutine [[ ]]
+    (re.compile(r"(\w+)\[\((.+?)\)\]"), r"\1[\2]"),        # cylinder [( )]
+    (re.compile(r"(\w+)\(\(\((.+?)\)\)\)"), r"\1[\2]"),    # double circle ((( )))
+    (re.compile(r"(\w+)\(\((.+?)\)\)"), r"\1[\2]"),        # circle (( ))
+    (re.compile(r"(\w+)\(\[(.+?)\]\)"), r"\1[\2]"),        # stadium ([ ])
+    (re.compile(r"(\w+)\[[\\/](.+?)[\\/]\]"), r"\1[\2]"),  # parallelogram/trapezoid [/ /] [\ \] [/ \] [\ /]
+    (re.compile(r"(\w+)\{(.+?)\}"), r"\1[\2]"),            # rhombus { }
+    (re.compile(r"(\w+)>(.+?)\]"), r"\1[\2]"),             # asymmetric/flag > ]
+    (re.compile(r"(\w+)\((.+?)\)"), r"\1[\2]"),            # round ( )
+]
 _UNSUPPORTED_BLOCK_RE = re.compile(
     r"^\s*(?:loop|alt|else|opt|par|and|critical|option|break|rect|"
     r"activate|deactivate|autonumber|end)\b.*$",
@@ -35,18 +57,39 @@ _UNSUPPORTED_BLOCK_RE = re.compile(
 )
 
 
-def preprocess_mermaid_for_ascii(source: str) -> str:
-    """Rewrite mermaid sequence diagrams into the subset mermaid-ascii supports.
+def normalize_flowchart_shapes(source: str) -> str:
+    """Rewrite alternate flowchart node shapes to the ``[text]`` form.
 
-    mermaid-ascii only understands ``->>`` and ``-->>`` arrows plus ``participant``
-    declarations. This helper converts ``Note`` lines into self-loops, maps the
-    other arrow variants (``->``, ``-x``, ``--x``, ``-)``, ``--)``, ``-->``) to
-    the supported pair, drops block keywords (``loop``, ``alt``, ``activate``…),
-    and flattens ``<br/>`` tags. Non-sequence diagrams are returned unchanged.
+    mermaid-ascii only parses rectangle nodes (``id[text]``); rhombus ``{}``,
+    cylinder ``[()]``, circle ``(())``, stadium ``([])``, hexagon ``{{}}``,
+    subroutine ``[[]]``, and parallelogram/trapezoid ``[/ /]`` nodes otherwise
+    render with their raw delimiters or bare node id. Each is rewritten to
+    ``id[text]`` so the label survives; the backend draws a rectangle either way.
+    """
+    out: list[str] = []
+    for line in source.splitlines():
+        for pattern, repl in _FLOWCHART_SHAPE_SUBS:
+            line = pattern.sub(repl, line)
+        out.append(line)
+    return "\n".join(out)
+
+
+def preprocess_mermaid_for_ascii(source: str) -> str:
+    """Rewrite a mermaid diagram into the subset mermaid-ascii supports.
+
+    For sequence diagrams: convert ``Note`` lines into self-loops, map the
+    arrow variants (``->``, ``-x``, ``--x``, ``-)``, ``--)``, ``-->``) to the
+    supported ``->>``/``-->>`` pair, drop block keywords (``loop``, ``alt``,
+    ``activate``…), and flatten ``<br/>`` tags. For flowcharts (``graph`` /
+    ``flowchart``): normalize alternate node shapes to ``[text]`` rectangles.
+    Other diagram types are returned unchanged.
     """
     lines = source.splitlines()
     first = next((l.strip() for l in lines if l.strip()), "")
-    if not first.lower().startswith("sequencediagram"):
+    first_lower = first.lower()
+    if not first_lower.startswith("sequencediagram"):
+        if first_lower.startswith(("graph", "flowchart")):
+            return normalize_flowchart_shapes(source)
         return source
 
     out: list[str] = []
