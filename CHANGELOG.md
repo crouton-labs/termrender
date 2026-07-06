@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## v4.0.0 (2026-07-06)
+
+### Features
+
+- **mermaid**: Also route ```mermaid fences through the mermaid renderer
+  ([`99a8017`](https://github.com/crouton-labs/termrender/commit/99a801783d719125505eef2dc1194e2e418ed025))
+
+BREAKING CHANGE: partially reverses 083f590. A fenced code block whose info string is `mermaid`
+  (e.g. GFM ````mermaid```` fences used by GitHub and most docs/agents unaware of the :::mermaid
+  directive) now renders as an ASCII mermaid diagram, same as :::mermaid. Any other language tag
+  still falls through to a plain CODE block; the :::mermaid directive is unchanged.
+
+Root-caused: the reported bug (fences render as raw source, not a diagram) was not a regression or
+  missing binary — the vendored mermaid-ascii binary and subprocess pipeline both work correctly. It
+  was 083f590's deliberate, documented breaking change dropping fence support. Human chose to extend
+  support back to fences rather than close as working-as-intended.
+
+### Breaking Changes
+
+- **mermaid**: Partially reverses 083f590. A fenced code block whose info string is `mermaid` (e.g.
+  GFM ````mermaid```` fences used by GitHub and most docs/agents unaware of the :::mermaid
+  directive) now renders as an ASCII mermaid diagram, same as :::mermaid. Any other language tag
+  still falls through to a plain CODE block; the :::mermaid directive is unchanged.
+
+
 ## v3.0.2 (2026-06-17)
 
 ### Bug Fixes
