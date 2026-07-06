@@ -1,6 +1,17 @@
 # CHANGELOG
 
 
+## v4.4.0 (2026-07-06)
+
+### Features
+
+- Add flowchart layout engine core (grandalf adapter + canvas rasterizer)
+  ([`23e26e9`](https://github.com/crouton-labs/termrender/commit/23e26e9c3228bfac302c270b4c0c5ffe880bfc20))
+
+- Add flowchart mermaid parser
+  ([`c9c80c3`](https://github.com/crouton-labs/termrender/commit/c9c80c30ed638c3532ef9464ce1cb7f4af4fa3ce))
+
+
 ## v4.3.2 (2026-07-06)
 
 ### Bug Fixes
