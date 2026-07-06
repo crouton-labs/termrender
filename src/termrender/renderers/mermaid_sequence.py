@@ -1,9 +1,10 @@
 """Native ASCII renderer for mermaid ``sequenceDiagram`` sources.
 
-Standalone module: exposes a single pure function, ``render_sequence``.
-Not wired into the ``mermaid.py`` dispatcher yet (a later integration
-phase owns that); this module has no dependency on ``Block`` or the
-rest of the renderer pipeline, and nothing here is imported elsewhere.
+Standalone module: exposes a single pure function, ``render_sequence``,
+wired into ``mermaid.py``'s dispatcher for any source whose first
+non-blank (post-prelude) line starts with ``sequenceDiagram``. This
+module has no dependency on ``Block`` or the rest of the renderer
+pipeline beyond the shared prelude-skipping helper.
 
 Layout model
 ------------
@@ -57,6 +58,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from termrender.renderers.mermaid_prelude import strip_prelude_lines
 from termrender.style import visual_center, visual_len
 
 __all__ = ["render_sequence", "SequenceDiagramError"]
@@ -567,7 +569,8 @@ def render_sequence(source: str, width: int) -> list[str]:
     del width  # advisory only; diagrams have intrinsic width (see docstring)
 
     lines = source.splitlines()
-    first = next((line.strip() for line in lines if line.strip()), "")
+    sniff_lines = strip_prelude_lines(lines)
+    first = next((line.strip() for line in sniff_lines if line.strip()), "")
     if not first.lower().startswith("sequencediagram"):
         raise SequenceDiagramError(
             "not a mermaid sequence diagram: source must start with 'sequenceDiagram'"

@@ -7,7 +7,15 @@ import subprocess
 
 from termrender._mermaid_bin import mermaid_ascii_bin
 from termrender.blocks import Block
-from termrender.renderers import mermaid_gantt, mermaid_pie
+from termrender.renderers import (
+    mermaid_gantt,
+    mermaid_journey,
+    mermaid_mindmap,
+    mermaid_pie,
+    mermaid_sequence,
+    mermaid_timeline,
+)
+from termrender.renderers.mermaid_prelude import strip_prelude_lines
 from termrender.style import visual_ljust
 
 
@@ -118,13 +126,16 @@ def preprocess_mermaid_for_ascii(source: str) -> str:
 
 
 def _first_line_type(source: str) -> str:
-    """Return the lowercased first non-blank line's leading keyword.
+    """Return the lowercased first real line's leading keyword.
 
     This is the dispatch key: mermaid identifies a diagram's type from its
     first line (``graph``/``flowchart``, ``pie``, ``gantt``, ``sequenceDiagram``,
-    ``classDiagram``, …). Returns ``""`` for an empty/blank source.
+    ``classDiagram``, …), after skipping any prelude (blank lines, ``%%``
+    comments/directives, ``---`` YAML frontmatter — see ``mermaid_prelude.py``).
+    Returns ``""`` for a source with no real content past its prelude.
     """
-    first = next((l.strip() for l in source.splitlines() if l.strip()), "")
+    lines = strip_prelude_lines(source.splitlines())
+    first = next((l.strip() for l in lines if l.strip()), "")
     return first.lower()
 
 
@@ -156,17 +167,26 @@ def _render_via_binary(source: str) -> str:
 def render_mermaid_lines(source: str, width: int) -> list[str]:
     """Dispatch a mermaid source to its type's renderer and return raw lines.
 
-    ``pie`` and ``gantt`` get dedicated native Python renderers. Every other
-    type (flowchart/graph, sequence, class, state, ER, journey, mindmap, …)
-    keeps today's exact path: the vendored Go mermaid-ascii binary, which
-    echoes unparseable/unsupported source back verbatim. Lines are returned
-    unpadded; callers apply width padding uniformly.
+    ``pie``, ``gantt``, ``sequenceDiagram``, ``mindmap``, ``journey``, and
+    ``timeline`` get dedicated native Python renderers. Every other type
+    (flowchart/graph, class, state, ER, …) keeps today's exact path: the
+    vendored Go mermaid-ascii binary, which echoes unparseable/unsupported
+    source back verbatim. Lines are returned unpadded; callers apply width
+    padding uniformly.
     """
     diagram_type = _first_line_type(source)
     if diagram_type.startswith("pie"):
         return mermaid_pie.render(source, width)
     if diagram_type.startswith("gantt"):
         return mermaid_gantt.render(source, width)
+    if diagram_type.startswith("sequencediagram"):
+        return mermaid_sequence.render_sequence(source, width)
+    if diagram_type.startswith("mindmap"):
+        return mermaid_mindmap.render(source, width)
+    if diagram_type.startswith("journey"):
+        return mermaid_journey.render(source, width)
+    if diagram_type.startswith("timeline"):
+        return mermaid_timeline.render(source, width)
     return _render_via_binary(source).split("\n")
 
 
