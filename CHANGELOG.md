@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.1.1 (2026-07-06)
+
+### Bug Fixes
+
+- **mermaid**: Honor inline title on pie header line
+  ([`37b4c37`](https://github.com/crouton-labs/termrender/commit/37b4c37581046d7a9b327f0e06f3ea5a5ca921d3))
+
+
 ## v4.1.0 (2026-07-06)
 
 ### Features
