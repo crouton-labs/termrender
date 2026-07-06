@@ -25,19 +25,25 @@ Grammar supported
 Header: ``graph``/``flowchart`` + direction (``TD``/``TB``/``LR``/``RL``/
 ``BT``). Node shapes: ``[rect]``, ``(round)``, ``([stadium])``,
 ``[(cylinder)]``, ``((circle))``, ``{diamond}``, ``{{hexagon}}``,
-``[[subroutine]]``, ``[/parallelogram/]`` — this phase renders every shape
-as a plain rectangle (distinct shape borders are a later phase; only the
-label text is load-bearing here). Edges: ``-->``, ``---``, ``-.->``, ``==>``
-(and bidirectional forms), with ``|label|`` and inline ``A -- text --> B``
-labels, and ``&`` fan-out. ``subgraph ... end`` blocks parse but are not yet
-rendered as frames (nodes inside them still place and render normally).
-``class``/``classDef``/``style``/``click``/``linkStyle`` lines are ignored.
+``[[subroutine]]``, ``[/parallelogram/]`` — each renders with a distinct
+shape-specific border (diamond/parallelogram slant tapers, round/stadium/
+circle rounded corners, a cylinder's rounded cap over a square base, a
+hexagon's cut corners, a subroutine's double-bar sides); only a shape whose
+box is too small for its own drawer falls back to the plain rectangle
+border. Edges: ``-->``, ``---``, ``-.->``, ``==>`` (and bidirectional
+forms), with ``|label|`` and inline ``A -- text --> B`` labels, and ``&``
+fan-out. ``subgraph ... end`` blocks (including nested subgraphs) render as
+enclosing frames with a left-anchored title when their members place
+contiguously enough for a clean rect; otherwise a block flattens (no frame,
+members still placed and drawn) rather than draw a frame that would
+visually claim a non-member node. ``class``/``classDef``/``style``/
+``click``/``linkStyle`` lines are ignored.
 
 Known degradations (by design, not bugs)
 -----------------------------------------
-- Node shapes other than a plain rectangle border are not yet visually
-  distinct (Phase 4 of this renderer's build).
-- Subgraph blocks parse but are not yet drawn as enclosing frames (Phase 4).
+- A subgraph whose members aren't placed contiguously enough for a clean
+  enclosing rect flattens (drops its frame and title) rather than draw a
+  frame that visually claims a non-member node.
 - See ``mermaid_flow_layout.py``'s module docstring for the edge-routing
   degradations (dense-graph crossings, label-lane overlap, CJK wrapping,
   minimum-box-size self-loop cosmetics).
