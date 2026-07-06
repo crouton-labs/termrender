@@ -30,6 +30,7 @@ dependencies = [
     "mistune>=3.0",
     "mermaid-ascii>=1.2",
     "pygments>=2.0",
+    "grandalf>=0.8",
 ]
 
 [project.urls]
