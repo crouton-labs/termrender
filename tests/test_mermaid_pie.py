@@ -31,10 +31,50 @@ class TestParsePie(unittest.TestCase):
         _, items = parse_pie(src)
         self.assertEqual(items[0]["value"], 12.5)
 
-    def test_unparseable_lines_skipped(self):
+    def test_invalid_line_degrades_whole_diagram(self):
         src = 'pie\n    this is not a data line\n    "A" : 5'
+        title, items = parse_pie(src)
+        self.assertIsNone(title)
+        self.assertEqual(items, [])
+
+    def test_comment_lines_ignored(self):
+        src = 'pie\n    %% a note\n    "A" : 5\n    "B" : 5'
         _, items = parse_pie(src)
-        self.assertEqual(items, [{"label": "A", "value": 5.0}])
+        self.assertEqual(len(items), 2)
+
+    def test_acc_title_and_descr_ignored(self):
+        src = (
+            'pie\n'
+            '    accTitle: My accessible title\n'
+            '    accDescr: My accessible description\n'
+            '    "A" : 5\n'
+        )
+        _, items = parse_pie(src)
+        self.assertEqual(len(items), 1)
+
+    def test_single_quoted_label(self):
+        src = "pie\n    'Bugs' : 40\n    'Features' : 60"
+        _, items = parse_pie(src)
+        self.assertEqual(items, [
+            {"label": "Bugs", "value": 40.0},
+            {"label": "Features", "value": 60.0},
+        ])
+
+    def test_escaped_quotes_in_double_quoted_label(self):
+        src = 'pie\n    "Say \\"hi\\"" : 5\n'
+        _, items = parse_pie(src)
+        self.assertEqual(items, [{"label": 'Say "hi"', "value": 5.0}])
+
+    def test_negative_value_degrades_whole_diagram(self):
+        src = 'pie\n    "A" : -5\n    "B" : 10'
+        title, items = parse_pie(src)
+        self.assertIsNone(title)
+        self.assertEqual(items, [])
+
+    def test_huge_numeric_value_degrades_whole_diagram(self):
+        src = 'pie\n    "A" : ' + "9" * 400 + "\n"
+        _, items = parse_pie(src)
+        self.assertEqual(items, [])
 
     def test_empty_pie_yields_no_items(self):
         _, items = parse_pie("pie\n")
@@ -76,6 +116,21 @@ class TestRenderPie(unittest.TestCase):
         src = "pie\n"
         lines = render_pie(src, width=40)
         self.assertEqual(lines, ["pie"])
+
+    def test_invalid_line_degrades_to_source(self):
+        src = 'pie\n    bad\n    "A" : 5'
+        lines = render_pie(src, width=40)
+        self.assertEqual(lines, src.splitlines())
+
+    def test_negative_value_degrades_to_source(self):
+        src = 'pie\n    "A" : -5\n    "B" : 10'
+        lines = render_pie(src, width=40)
+        self.assertEqual(lines, src.splitlines())
+
+    def test_huge_numeric_value_degrades_to_source(self):
+        src = 'pie\n    "A" : ' + "9" * 400
+        lines = render_pie(src, width=40)
+        self.assertEqual(lines, src.splitlines())
 
     def test_no_ansi_when_monochrome(self):
         src = 'pie\n    "A" : 1\n    "B" : 2'
