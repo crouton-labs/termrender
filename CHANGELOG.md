@@ -1,6 +1,34 @@
 # CHANGELOG
 
 
+## v4.3.0 (2026-07-06)
+
+### Features
+
+- Add flowchart renderer data model
+  ([`cf3caef`](https://github.com/crouton-labs/termrender/commit/cf3caef28411d2ace3f71c63f218af52ba460da0))
+
+- Wire sequence renderer and add native mindmap/journey/timeline renderers
+  ([`120b51c`](https://github.com/crouton-labs/termrender/commit/120b51cddf58cd91ee948706c143c84ca42c7e9f))
+
+- mermaid.py dispatch now routes sequenceDiagram to the finished mermaid_sequence.render_sequence,
+  and mindmap/journey/timeline to new native renderers, leaving flowchart/graph/class/state/ER on
+  the vendored Go binary path unchanged. - New shared mermaid_prelude.strip_prelude_lines skips
+  leading %% comments, %%{init}%% directives, and --- YAML frontmatter before sniffing a diagram's
+  type keyword, fixing valid diagrams with those preludes mis-routing to the binary fallback.
+  mermaid_sequence.py's own header guard uses the same helper. - mermaid_mindmap.py:
+  indentation-based mindmap source maps directly onto tree.py's shape; strips the mindmap header,
+  ::icon()/:::class decoration, and node-shape delimiters down to label text. - mermaid_journey.py:
+  section/task outline mapped onto tree.py, tasks rendered as depth-1 children with a star rating
+  and actor list. - mermaid_timeline.py: sections rendered as separate timeline.py sub-timelines,
+  with period-less continuation lines correctly attaching to the previous row instead of repeating
+  the date. - Dispatch integration tests for every new route plus all three prelude forms; parse +
+  golden-output render tests per new module. - CLAUDE.md updated to describe the current
+  dispatch/prelude state.
+
+Full suite: 230 -> 292 tests, all green.
+
+
 ## v4.2.0 (2026-07-06)
 
 ### Bug Fixes
