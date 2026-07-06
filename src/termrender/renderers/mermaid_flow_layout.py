@@ -42,18 +42,39 @@ direction. A cyclic :class:`FlowGraph` (e.g. ``A->B->C->A``) lays out and
 renders without any manual cycle-breaking — confirmed empirically against
 grandalf 0.8 (see the design doc's "grandalf adapter recipe" section).
 
-Grammar / scope this phase
----------------------------
+Edge routing
+------------
 This module renders every node as a bordered **rectangle** regardless of its
 declared :class:`NodeShape` — distinct shape borders (diamond, round,
-stadium, circle, ...) are a later phase. Edges are drawn as a **placeholder**
-straight line or simple two-segment L path between each pair's facing border
-midpoints — no arrowheads, no back-edge side-lane routing, no edge labels;
-the full orthogonal router (arrowheads, labels, back-edge lanes, self-loops)
-is a later phase built on top of the :class:`Canvas`/:class:`BoxRect`
-exported here. Subgraph frames (:meth:`Canvas.draw_frame`) are implemented
-as part of the shared grid contract but not yet invoked by
-:func:`layout_flowgraph`.
+stadium, circle, ...) and subgraph frames (:meth:`Canvas.draw_frame` exists
+but :func:`layout_flowgraph` does not yet call it) are a later phase.
+
+Edges get the full orthogonal router. Per edge, endpoint anchors are chosen
+by the two boxes' *relative rank position* (their spans along the rank axis
+either overlap — same rank — or one is strictly ahead of the other, a test
+that holds regardless of direction because rank bands are always separated
+by a clear gap): a forward edge exits/enters the border facing the rank-flow
+direction (``bottom_mid``/``top_mid`` for TB, mirrored/transposed for
+BT/LR/RL); a same-rank edge uses the two boxes' facing side mids; a back-edge
+(destination at an earlier rank — the cycle case) exits/enters the side
+perpendicular to the rank axis and routes through a growing side lane so
+stacked back-edges never collide (the right side for TB/BT, the bottom side
+for LR/RL, per the axis swap). Forward paths are a single straight run when
+the two anchors already share a column/row, else a Z/staircase through the
+midpoint of the clear inter-rank band. Arrowheads (``▼▲▶◀``) are chosen from
+the final segment's direction of travel and overwrite the border cell they
+land on. Edge labels center on the path's longest straight run, shifting
+along it to the nearest cell span clear of any box if the ideal midpoint
+lands on one. Self-loops (``src == dst``, excluded from the grandalf graph)
+draw a small loop off the same side used for back-edge lanes, stacking
+outward per repeated self-loop on one node.
+
+The router draws only axis-aligned L/Z/C paths and does no global crossing
+minimization or obstacle avoidance — a path that would cross another box
+simply has those cells skipped by :meth:`Canvas.draw_segment` (reserved
+cells are never overwritten by a line). This matches the medium's ceiling
+for small (≤~20 node) agent-emitted graphs; see the design doc's
+"Orthogonal edge routing" section for the full rationale.
 
 Known degradations (by design, not bugs)
 -----------------------------------------
@@ -62,8 +83,13 @@ Known degradations (by design, not bugs)
   root ``CLAUDE.md``) — CJK/wide-glyph labels may wrap at the wrong point.
   Box *dimensions*, however, are always computed from :func:`visual_len` of
   the wrapped lines, so the box itself is never too narrow for its content.
-- Dense graphs may show edge-line crossings and label overlap once the real
-  router lands; this phase draws no labels at all.
+- Dense graphs may show edge-line crossings, and two edge labels sharing a
+  crowded lane may overlap each other even after the nearest-clear-run
+  shift — an accepted limit of the medium, not a routing bug.
+- A self-loop or back-edge on/into a minimum-size box (``_MIN_BOX_W``/
+  ``_MIN_BOX_H``) may land its arrowhead on a corner glyph rather than a
+  straight border cell, since a 1-interior-row/column box has no other
+  distinct anchor point to use — cosmetic only.
 - An edge referencing a node id absent from the graph (a malformed/hand-built
   :class:`FlowGraph`) is silently skipped rather than raised — the parser is
   expected to guarantee valid endpoints, but this module never crashes on a
@@ -521,12 +547,33 @@ def _place_nodes(
 
 
 # --------------------------------------------------------------------------
-# --- router (placeholder — full orthogonal router is a later phase) ---
+# --- router ---
 # --------------------------------------------------------------------------
+
+# The full orthogonal router. Endpoint anchors are chosen from each edge's
+# *relative rank position* (forward / same-rank / back-edge); forward edges
+# route a straight or Z-shaped (staircase) path through the clear inter-rank
+# band, same-rank edges route between facing side mids, and back-edges route
+# through a growing side lane so they never overlay forward edges. See the
+# design doc's "Orthogonal edge routing" section for the full rationale —
+# this module implements it without re-deciding any of it.
+
+_LANE_GAP = 2      # spacing between stacked back-edge side lanes
+_LANE_MARGIN = 2   # gap from the involved boxes' far edge to the first lane
+_LOOP_REACH = 3    # base horizontal/vertical extent of a self-loop
+
+_ARROW_GLYPHS: dict[tuple[int, int], str] = {
+    (1, 0): "\u25b6",   # ▶
+    (-1, 0): "\u25c0",  # ◀
+    (0, 1): "\u25bc",   # ▼
+    (0, -1): "\u25b2",  # ▲
+}
 
 
 def _facing_anchor(this: BoxRect, other: BoxRect) -> tuple[int, int]:
-    """Pick the border midpoint of ``this`` box facing toward ``other``."""
+    """Pick the border midpoint of ``this`` box facing toward ``other`` —
+    used for same-rank edges, where neither box is "ahead" of the other
+    along the rank axis."""
     tcx, tcy = this.center
     ocx, ocy = other.center
     dx, dy = ocx - tcx, ocy - tcy
@@ -535,27 +582,328 @@ def _facing_anchor(this: BoxRect, other: BoxRect) -> tuple[int, int]:
     return this.right_mid if dx >= 0 else this.left_mid
 
 
-def _draw_edge_stub(canvas: Canvas, rects: dict[str, BoxRect], edge: FlowEdge) -> None:
-    """Draw a placeholder straight/L-shaped line between two placed boxes.
+def _arrow_glyph(frm: tuple[int, int], to: tuple[int, int]) -> str:
+    """``▼▲▶◀`` for the direction of travel from ``frm`` to ``to`` — the
+    glyph an arrowhead landing at ``to`` should show."""
+    dx, dy = to[0] - frm[0], to[1] - frm[1]
+    if dx == 0 and dy == 0:
+        return _ARROW_GLYPHS[(0, 1)]
+    if abs(dx) >= abs(dy):
+        return _ARROW_GLYPHS[(1 if dx > 0 else -1, 0)]
+    return _ARROW_GLYPHS[(0, 1 if dy > 0 else -1)]
 
-    Self-loops and edges referencing an unplaced node id are silently
-    skipped (self-loops are excluded from the grandalf graph — see module
-    docstring — and are a later phase's job to draw; a dangling reference
-    is a defensive no-op, never a crash).
+
+def _rank_is_horizontal(direction: Direction) -> bool:
+    """True when the rank-flow axis is x (LR/RL) rather than y (TB/BT)."""
+    return direction in (Direction.LR, Direction.RL)
+
+
+def _forward_increasing(direction: Direction) -> bool:
+    """True when rank number increases with increasing coordinate along the
+    rank axis (TB: increasing y; LR: increasing x) — false for BT/RL, whose
+    adapter coordinate transform mirrors that axis (see module docstring)."""
+    return direction in (Direction.TB, Direction.LR)
+
+
+def _rank_extent(direction: Direction, rect: BoxRect) -> tuple[int, int]:
+    """``rect``'s [min, max] span along the rank axis. Two boxes in the same
+    rank always have overlapping spans (the adapter places a whole rank in
+    one top/bottom-aligned band); boxes in different ranks never do, since
+    ``_ROW_GAP``/``_GAP_X`` guarantee a clear gap between bands — so span
+    overlap is a direction-agnostic same-rank test."""
+    if _rank_is_horizontal(direction):
+        return (rect.x, rect.x + rect.w - 1)
+    return (rect.y, rect.y + rect.h - 1)
+
+
+def _forward_exit(direction: Direction, rect: BoxRect) -> tuple[int, int]:
+    """``rect``'s border anchor facing *downstream* along the rank axis."""
+    horiz = _rank_is_horizontal(direction)
+    forward = _forward_increasing(direction)
+    if horiz:
+        return rect.right_mid if forward else rect.left_mid
+    return rect.bottom_mid if forward else rect.top_mid
+
+
+def _forward_entry(direction: Direction, rect: BoxRect) -> tuple[int, int]:
+    """``rect``'s border anchor facing *upstream* — the mirror image of
+    :func:`_forward_exit`, used on the destination side of a forward edge."""
+    horiz = _rank_is_horizontal(direction)
+    forward = _forward_increasing(direction)
+    if horiz:
+        return rect.left_mid if forward else rect.right_mid
+    return rect.top_mid if forward else rect.bottom_mid
+
+
+def _lane_anchor(direction: Direction, rect: BoxRect) -> tuple[int, int]:
+    """``rect``'s border anchor on the side used for back-edge side lanes
+    and self-loops: the side perpendicular to the rank axis and away from
+    it — the right side for TB/BT, the bottom side for LR/RL ("the right
+    lane becomes the bottom lane" after LR/RL's axis swap)."""
+    return rect.bottom_mid if _rank_is_horizontal(direction) else rect.right_mid
+
+
+def _abstract(direction: Direction, point: tuple[int, int]) -> tuple[int, int]:
+    """``point`` decomposed into (primary, secondary) = (rank-axis coord,
+    off-axis coord) — the coordinate frame the path-shape helpers reason
+    in, direction-agnostically. Inverse: :func:`_real`."""
+    x, y = point
+    return (x, y) if _rank_is_horizontal(direction) else (y, x)
+
+
+def _real(direction: Direction, primary: int, secondary: int) -> tuple[int, int]:
+    """Inverse of :func:`_abstract`: (primary, secondary) back to real
+    ``(x, y)`` canvas coordinates."""
+    return (primary, secondary) if _rank_is_horizontal(direction) else (secondary, primary)
+
+
+def _z_path(
+    direction: Direction, exit_pt: tuple[int, int], entry_pt: tuple[int, int]
+) -> list[tuple[int, int]]:
+    """Forward-edge path: a single straight run when both anchors share the
+    off-axis coordinate, else a Z/staircase — out of ``exit_pt``, across at
+    the midpoint between the two ranks' facing borders, into ``entry_pt``."""
+    p0, s0 = _abstract(direction, exit_pt)
+    p1, s1 = _abstract(direction, entry_pt)
+    if s0 == s1:
+        return [exit_pt, entry_pt]
+    mid_p = (p0 + p1) // 2
+    return [exit_pt, _real(direction, mid_p, s0), _real(direction, mid_p, s1), entry_pt]
+
+
+def _lane_path(
+    direction: Direction,
+    exit_pt: tuple[int, int],
+    entry_pt: tuple[int, int],
+    lane_secondary: int,
+) -> list[tuple[int, int]]:
+    """Back-edge C-path: out of ``exit_pt`` to the side lane, along the lane,
+    back into ``entry_pt`` — never overlaying the forward Z-paths, which
+    stay within the involved boxes' own span on this axis."""
+    p0, s0 = _abstract(direction, exit_pt)
+    p1, s1 = _abstract(direction, entry_pt)
+    del s0, s1
+    return [
+        exit_pt,
+        _real(direction, p0, lane_secondary),
+        _real(direction, p1, lane_secondary),
+        entry_pt,
+    ]
+
+
+def _lane_secondary_base(direction: Direction, a: BoxRect, b: BoxRect) -> int:
+    """Starting side-lane coordinate just past the two involved boxes' far
+    edge on the off-axis — the base that :func:`_route_edge` adds
+    ``_LANE_MARGIN + lane * _LANE_GAP`` to, per back-edge, to avoid stacking
+    lanes."""
+    if _rank_is_horizontal(direction):
+        return max(a.y + a.h - 1, b.y + b.h - 1)
+    return max(a.x + a.w - 1, b.x + b.w - 1)
+
+
+def _segment_length(a: tuple[int, int], b: tuple[int, int]) -> int:
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
+def _longest_segment(
+    points: list[tuple[int, int]],
+) -> tuple[tuple[int, int], tuple[int, int]] | None:
+    """The longest straight run in a polyline — where an edge label is
+    centered."""
+    segments = list(zip(points, points[1:]))
+    if not segments:
+        return None
+    return max(segments, key=lambda seg: _segment_length(*seg))
+
+
+def _label_positions(length: int, center: int, lo: int, hi: int) -> list[int]:
+    """Candidate run-start offsets within ``[lo, hi]``, nearest-``center``
+    first — how a label shifts off a reserved cell to the nearest clear
+    run along its segment."""
+    span = max(hi - lo + 1, 1)
+    if hi - lo + 1 >= length:
+        ideal = max(lo, min(center - length // 2, hi - length + 1))
+    else:
+        ideal = lo
+    order = [ideal]
+    seen = {ideal}
+    for d in range(1, span + 1):
+        for cand in (ideal + d, ideal - d):
+            if cand not in seen:
+                order.append(cand)
+                seen.add(cand)
+    return order
+
+
+def _draw_label_on_segment(
+    canvas: Canvas, a: tuple[int, int], b: tuple[int, int], label: str
+) -> None:
+    """Center ``label`` on the straight run ``a``-``b``. A label always
+    *reads* horizontally (measured with :func:`visual_len`): on a
+    horizontal segment it centers along the segment's own x-span at the
+    segment's row; on a vertical segment (e.g. a back-edge's side lane) it
+    still reads horizontally, centered on the segment's column, at a row
+    chosen from the segment's y-span — matching the sequence renderer's
+    self-loop label placement. Shifts along the search axis to the nearest
+    span/row fully clear of a reserved (box) cell; if none exists, writes
+    at the ideal placement anyway (overflow tolerated) but skips individual
+    reserved cells — a label never corrupts a box.
     """
-    if edge.src == edge.dst:
+    length = visual_len(label)
+    if length <= 0:
         return
+    (x0, y0), (x1, y1) = a, b
+
+    if y0 == y1:
+        # Horizontal segment: search along x for a clear run at row y0.
+        lo, hi = (x0, x1) if x0 <= x1 else (x1, x0)
+        row = y0
+        center = (lo + hi) // 2
+
+        def cells(start: int) -> list[tuple[int, int]]:
+            return [(start + i, row) for i in range(length)]
+
+        for start in _label_positions(length, center, lo, hi):
+            run = cells(start)
+            if not any(canvas.is_reserved(x, y) for x, y in run):
+                for (px, py), ch in zip(run, label):
+                    canvas.draw_glyph(px, py, ch)
+                return
+        start = max(lo, min(center - length // 2, hi - length + 1))
+        for (px, py), ch in zip(cells(start), label):
+            if not canvas.is_reserved(px, py):
+                canvas.draw_glyph(px, py, ch)
+        return
+
+    # Vertical segment: the label still reads horizontally, centered on
+    # column x0; search along y for a row whose horizontal run is clear.
+    lo, hi = (y0, y1) if y0 <= y1 else (y1, y0)
+    col = x0
+    # Clamp rather than let the run go negative: a negative x is simply
+    # unaddressable (Canvas has no left margin to grow into), which would
+    # silently drop the label's leading characters instead of overflowing
+    # visibly to the right like every other overflow case in this module.
+    start_x = max(0, col - length // 2)
+
+    def row_cells(row: int) -> list[tuple[int, int]]:
+        return [(start_x + i, row) for i in range(length)]
+
+    center_row = (lo + hi) // 2
+    for row in _label_positions(1, center_row, lo, hi):
+        run = row_cells(row)
+        if not any(canvas.is_reserved(x, y) for x, y in run):
+            for (px, py), ch in zip(run, label):
+                canvas.draw_glyph(px, py, ch)
+            return
+    for (px, py), ch in zip(row_cells(center_row), label):
+        if not canvas.is_reserved(px, py):
+            canvas.draw_glyph(px, py, ch)
+
+
+def _draw_polyline(canvas: Canvas, points: list[tuple[int, int]], style: EdgeStyle) -> None:
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        canvas.draw_segment(x0, y0, x1, y1, style)
+
+
+def _draw_arrowheads(canvas: Canvas, points: list[tuple[int, int]], edge: FlowEdge) -> None:
+    if edge.dst_arrow:
+        canvas.draw_glyph(*points[-1], _arrow_glyph(points[-2], points[-1]))
+    if edge.src_arrow:
+        canvas.draw_glyph(*points[0], _arrow_glyph(points[1], points[0]))
+
+
+def _self_loop_points(
+    direction: Direction, rect: BoxRect, lane: int
+) -> list[tuple[int, int]]:
+    """A small loop off the box's lane side — the flowchart analogue of the
+    sequence renderer's self-message loop (``_self_loop_rows``). Uses the
+    box's *full* border range (corners included) rather than only interior
+    rows/columns so it stays correct even at ``_MIN_BOX_W``/``_MIN_BOX_H``,
+    where there is only one interior row/column to work with."""
+    reach = _LOOP_REACH + lane * 2
+    ax, ay = _lane_anchor(direction, rect)
+    if _rank_is_horizontal(direction):
+        full_lo, full_hi = rect.x, rect.x + rect.w - 1
+        lo = max(full_lo, ax - 1)
+        hi = min(full_hi, ax + 1)
+        if hi <= lo:
+            hi = min(full_hi, lo + 1)
+        if hi <= lo:
+            lo = max(full_lo, hi - 1)
+        far = ay + reach
+        return [(lo, ay), (lo, far), (hi, far), (hi, ay)]
+    full_lo, full_hi = rect.y, rect.y + rect.h - 1
+    lo = max(full_lo, ay - 1)
+    hi = min(full_hi, ay + 1)
+    if hi <= lo:
+        hi = min(full_hi, lo + 1)
+    if hi <= lo:
+        lo = max(full_lo, hi - 1)
+    far = ax + reach
+    return [(ax, lo), (far, lo), (far, hi), (ax, hi)]
+
+
+def _route_edge(
+    canvas: Canvas,
+    rects: dict[str, BoxRect],
+    direction: Direction,
+    edge: FlowEdge,
+    lane_counter: list[int],
+    self_loop_counter: dict[str, int],
+) -> None:
+    """Draw one edge's full orthogonal path: anchors chosen by relative
+    rank position, an L/Z/C path shape, arrowheads, and an edge label.
+    Dangling node-id references are a defensive no-op (the parser
+    guarantees valid endpoints; this module never crashes on one).
+    """
     src_rect = rects.get(edge.src)
     dst_rect = rects.get(edge.dst)
     if src_rect is None or dst_rect is None:
         return
-    x0, y0 = _facing_anchor(src_rect, dst_rect)
-    x1, y1 = _facing_anchor(dst_rect, src_rect)
-    if x0 == x1 or y0 == y1:
-        canvas.draw_segment(x0, y0, x1, y1, edge.style)
+
+    if edge.src == edge.dst:
+        lane = self_loop_counter.get(edge.src, 0)
+        self_loop_counter[edge.src] = lane + 1
+        points = _self_loop_points(direction, src_rect, lane)
     else:
-        canvas.draw_segment(x0, y0, x0, y1, edge.style)
-        canvas.draw_segment(x0, y1, x1, y1, edge.style)
+        src_extent = _rank_extent(direction, src_rect)
+        dst_extent = _rank_extent(direction, dst_rect)
+        same_rank = not (dst_extent[1] < src_extent[0] or src_extent[1] < dst_extent[0])
+
+        if same_rank:
+            points = [_facing_anchor(src_rect, dst_rect), _facing_anchor(dst_rect, src_rect)]
+        else:
+            src_center = (src_extent[0] + src_extent[1]) / 2
+            dst_center = (dst_extent[0] + dst_extent[1]) / 2
+            forward = (dst_center > src_center) == _forward_increasing(direction)
+            if forward:
+                points = _z_path(
+                    direction,
+                    _forward_exit(direction, src_rect),
+                    _forward_entry(direction, dst_rect),
+                )
+            else:
+                lane = lane_counter[0]
+                lane_counter[0] += 1
+                lane_secondary = (
+                    _lane_secondary_base(direction, src_rect, dst_rect)
+                    + _LANE_MARGIN
+                    + lane * _LANE_GAP
+                )
+                points = _lane_path(
+                    direction,
+                    _lane_anchor(direction, src_rect),
+                    _lane_anchor(direction, dst_rect),
+                    lane_secondary,
+                )
+
+    _draw_polyline(canvas, points, edge.style)
+    _draw_arrowheads(canvas, points, edge)
+
+    if edge.label:
+        seg = _longest_segment(points)
+        if seg is not None:
+            _draw_label_on_segment(canvas, *seg, edge.label)
 
 
 # --------------------------------------------------------------------------
@@ -595,8 +943,10 @@ def layout_flowgraph(g: FlowGraph, width: int) -> list[str]:
             rect = rects.get(n.id)
             if rect is not None:
                 canvas.draw_box(rect, n.shape, n.label)
+        lane_counter = [0]
+        self_loop_counter: dict[str, int] = {}
         for e in g.edges:
-            _draw_edge_stub(canvas, rects, e)
+            _route_edge(canvas, rects, g.direction, e, lane_counter, self_loop_counter)
         return canvas.to_lines()
     except Exception:
         return []
