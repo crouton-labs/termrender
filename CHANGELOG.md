@@ -1,6 +1,28 @@
 # CHANGELOG
 
 
+## v4.5.0 (2026-07-06)
+
+### Features
+
+- Add flowchart edge router and public render_flowchart
+  ([`a1b46cf`](https://github.com/crouton-labs/termrender/commit/a1b46cf11607ec6b31ea8fe1b4d90b11aafff10f))
+
+- Replace the placeholder edge drawing in mermaid_flow_layout.py with the full orthogonal router:
+  rank-relative endpoint anchors (forward/same-rank/ back-edge), L/Z staircase paths for forward
+  edges, growing side-lane C-paths for back-edges so they never overlay forward edges, arrowheads
+  chosen from final-segment direction, edge labels centered on the longest straight run (shifting
+  off reserved cells), and self-loops modeled on the sequence renderer's self-message loop. - Add
+  mermaid_flow.py exposing the public, pure, never-raising render_flowchart(source, width) ->
+  list[str], wiring parse -> layout_flowgraph -> lines behind the three-case degradation contract
+  (no header, zero nodes, unexpected layout exception -> raw echo). - Add
+  tests/test_mermaid_flow.py: real end-to-end geometry/topology assertions, including the labeled
+  back-edge cycle that panics the Go binary, multi-parent attachment, headless edges, and echo
+  degradation.
+
+Unwired: nothing imports mermaid_flow yet (later phase's cutover).
+
+
 ## v4.4.0 (2026-07-06)
 
 ### Features
