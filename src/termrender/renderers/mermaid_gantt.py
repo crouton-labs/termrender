@@ -102,8 +102,8 @@ def _parse_date(token: str, fmt: str) -> datetime | None:
         return None
 
 
-def _parse_exclude_tokens(spec: str) -> tuple[bool, set[date]]:
-    """Parse the token list of an ``excludes``/``includes`` directive.
+def _parse_excludes_tokens(spec: str) -> tuple[bool, set[date]]:
+    """Parse the token list of an ``excludes`` directive.
 
     Supports the common cases: the ``weekends`` keyword and explicit
     ``YYYY-MM-DD`` dates. Any other form (e.g. day names like ``friday``)
@@ -122,11 +122,35 @@ def _parse_exclude_tokens(spec: str) -> tuple[bool, set[date]]:
         if _ISO_DATE_RE.match(tok):
             dt = _parse_date(tok, "%Y-%m-%d")
             if dt is None:
-                raise _Unsupported(f"unparseable excludes/includes date {tok!r}")
+                raise _Unsupported(f"unparseable excludes date {tok!r}")
             dates.add(dt.date())
             continue
-        raise _Unsupported(f"unsupported excludes/includes token {tok!r}")
+        raise _Unsupported(f"unsupported excludes token {tok!r}")
     return weekends, dates
+
+
+def _parse_includes_tokens(spec: str) -> set[date]:
+    """Parse the token list of an ``includes`` directive.
+
+    Only explicit ``YYYY-MM-DD`` dates are implemented (re-including a
+    specific day that ``excludes`` would otherwise skip). ``weekends``
+    isn't a supported ``includes`` token — there's no "re-include every
+    weekend" semantics implemented — so it raises ``_Unsupported`` to
+    degrade the whole diagram rather than silently no-op-ing a directive
+    that looks like it should cancel an ``excludes weekends`` rule.
+    """
+    dates: set[date] = set()
+    for tok in re.split(r"[,\s]+", spec.strip()):
+        if not tok:
+            continue
+        if _ISO_DATE_RE.match(tok):
+            dt = _parse_date(tok, "%Y-%m-%d")
+            if dt is None:
+                raise _Unsupported(f"unparseable includes date {tok!r}")
+            dates.add(dt.date())
+            continue
+        raise _Unsupported(f"unsupported includes token {tok!r}")
+    return dates
 
 
 def _is_excluded(
@@ -188,20 +212,21 @@ def _advance_working_days(
 def parse_gantt(source: str) -> dict:
     """Parse the core mermaid gantt grammar into a title + section/task tree.
 
-    Handles ``dateFormat``, ``title``, ``section``, ``excludes``/
-    ``includes`` (``weekends`` and explicit dates), ``%%`` comments,
-    ``milestone`` tasks, ``until <taskId>``, and task lines of the form
-    ``name : [status,] [id,] [start-date|after id,] duration-or-end``.
-    Lines that don't match a recognized shape (a task with no resolvable
-    start anchor, an unrecognized status keyword, ...) are skipped rather
-    than raising — agents emit a wide variety of gantt dialects and an
-    unparseable line must degrade, not crash.
+    Handles ``dateFormat``, ``title``, ``section``, ``excludes``
+    (``weekends`` and explicit dates), ``includes`` (explicit dates only),
+    ``%%`` comments, ``milestone`` tasks, ``until <taskId>``, and task
+    lines of the form ``name : [status,] [id,] [start-date|after id,]
+    duration-or-end``. Lines that don't match a recognized shape (a task
+    with no resolvable start anchor, an unrecognized status keyword, ...)
+    are skipped rather than raising — agents emit a wide variety of
+    gantt dialects and an unparseable line must degrade, not crash.
 
     A construct we can't safely resolve (an invalid ``dateFormat``, a
-    numeric overflow, an ``until`` reference to an unknown task id, or an
-    ``excludes``/``includes`` form beyond ``weekends``/explicit dates)
-    degrades the *whole* diagram: this returns ``{"title": None,
-    "sections": []}``, which the renderer falls back to raw source for.
+    numeric or date-arithmetic overflow, an ``until`` reference to an
+    unknown task id, or an ``excludes``/``includes`` form beyond
+    ``weekends``/explicit dates) degrades the *whole* diagram: this
+    returns ``{"title": None, "sections": []}``, which the renderer
+    falls back to raw source for.
 
     Returns ``{"title": str | None, "sections": [{"name": str | None,
     "tasks": [{"label": str, "start": datetime, "end": datetime,
@@ -250,15 +275,14 @@ def _parse_gantt(source: str) -> dict:
 
         m = _EXCLUDES_RE.match(line)
         if m:
-            w, d = _parse_exclude_tokens(m.group(1))
+            w, d = _parse_excludes_tokens(m.group(1))
             exclude_weekends = exclude_weekends or w
             exclude_dates |= d
             continue
 
         m = _INCLUDES_RE.match(line)
         if m:
-            _, d = _parse_exclude_tokens(m.group(1))
-            include_dates |= d
+            include_dates |= _parse_includes_tokens(m.group(1))
             continue
 
         if ":" not in line:
@@ -316,7 +340,12 @@ def _parse_gantt(source: str) -> dict:
             else:
                 start = last_end
             if start is not None:
-                start = _skip_excluded(start, exclude_weekends, exclude_dates, include_dates)
+                try:
+                    start = _skip_excluded(
+                        start, exclude_weekends, exclude_dates, include_dates
+                    )
+                except OverflowError:
+                    raise _Unsupported("date overflow skipping excluded days") from None
 
         if start is None:
             # No date, no "after" dependency, no prior task to anchor to —
@@ -344,7 +373,10 @@ def _parse_gantt(source: str) -> dict:
                 except OverflowError:
                     raise _Unsupported("duration overflow") from None
             else:
-                end = start + timedelta(days=1)
+                try:
+                    end = start + timedelta(days=1)
+                except OverflowError:
+                    raise _Unsupported("date overflow computing default end") from None
         if end < start:
             end = start
 

@@ -121,6 +121,54 @@ class TestParseGantt(unittest.TestCase):
         parsed = parse_gantt(src)
         self.assertEqual(parsed["sections"], [])
 
+    def test_default_end_overflow_degrades_whole_diagram(self):
+        # No duration/end token: falls to the implicit "+1 day" default,
+        # which overflows datetime.max for a task starting on 9999-12-31.
+        src = "gantt\n    dateFormat YYYY-MM-DD\n    Task1 :9999-12-31\n"
+        parsed = parse_gantt(src)
+        self.assertEqual(parsed, {"title": None, "sections": []})
+
+    def test_skip_excluded_overflow_degrades_whole_diagram(self):
+        # Task2's default start (last_end = 9999-12-31) falls on an
+        # excluded day, so _skip_excluded walks forward and overflows
+        # datetime.max.
+        src = (
+            "gantt\n"
+            "    dateFormat YYYY-MM-DD\n"
+            "    excludes 9999-12-31\n"
+            "    Task1 :9999-12-30, 1d\n"
+            "    Task2 : 5d\n"
+        )
+        parsed = parse_gantt(src)
+        self.assertEqual(parsed, {"title": None, "sections": []})
+
+    def test_includes_weekends_is_unsupported(self):
+        # "includes weekends" isn't implemented (only explicit dates are);
+        # it must degrade rather than silently no-op the excludes rule.
+        src = (
+            "gantt\n"
+            "    dateFormat YYYY-MM-DD\n"
+            "    excludes weekends\n"
+            "    includes weekends\n"
+            "    Task1 :2024-01-05, 2d\n"
+        )
+        parsed = parse_gantt(src)
+        self.assertEqual(parsed["sections"], [])
+
+    def test_includes_explicit_date_reincludes_excluded_day(self):
+        src = (
+            "gantt\n"
+            "    dateFormat YYYY-MM-DD\n"
+            "    excludes 2024-01-08\n"
+            "    includes 2024-01-08\n"
+            "    Task1 :2024-01-05, 3d\n"
+        )
+        parsed = parse_gantt(src)
+        task = parsed["sections"][0]["tasks"][0]
+        # The includes directive cancels the exclusion, so the naive +3d
+        # end (2024-01-08) is not pushed out.
+        self.assertEqual(task["end"], datetime(2024, 1, 8))
+
     def test_comment_lines_and_inline_comments_stripped(self):
         src = (
             "gantt\n"
@@ -214,6 +262,26 @@ class TestRenderGantt(unittest.TestCase):
 
     def test_unsupported_construct_degrades_to_source(self):
         src = "gantt\n    dateFormat YYYY-YYYY\n    Task1 :2024-01-01, 5d\n"
+        lines = render_gantt(src, width=40)
+        self.assertEqual(lines, src.splitlines())
+
+    def test_huge_duration_degrades_to_source(self):
+        src = "gantt\n    dateFormat YYYY-MM-DD\n    Task1 :2024-01-01, 1000000000d\n"
+        lines = render_gantt(src, width=40)
+        self.assertEqual(lines, src.splitlines())
+
+    def test_unsupported_excludes_form_degrades_to_source(self):
+        src = (
+            "gantt\n"
+            "    dateFormat YYYY-MM-DD\n"
+            "    excludes friday\n"
+            "    Task1 :2024-01-05, 2d\n"
+        )
+        lines = render_gantt(src, width=40)
+        self.assertEqual(lines, src.splitlines())
+
+    def test_until_unknown_reference_degrades_to_source(self):
+        src = "gantt\n    dateFormat YYYY-MM-DD\n    Task2 :2024-01-01, until nonexistent\n"
         lines = render_gantt(src, width=40)
         self.assertEqual(lines, src.splitlines())
 

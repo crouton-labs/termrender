@@ -67,9 +67,13 @@ def parse_pie(source: str) -> tuple[str | None, list[dict]]:
         m = _HEADER_RE.match(line)
         if m:
             # Mermaid allows the title inline on the header line:
-            # ``pie title X`` / ``pie showData title X``.
-            tm = _TITLE_RE.match(m.group(1))
-            if tm:
+            # ``pie title X`` / ``pie showData title X``. Anything else
+            # trailing the header is invalid grammar.
+            tail = m.group(1)
+            if tail:
+                tm = _TITLE_RE.match(tail)
+                if not tm:
+                    return None, []
                 title = tm.group(1)
             continue
         m = _TITLE_RE.match(line)

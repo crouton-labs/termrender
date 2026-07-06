@@ -76,6 +76,12 @@ class TestParsePie(unittest.TestCase):
         _, items = parse_pie(src)
         self.assertEqual(items, [])
 
+    def test_invalid_header_tail_degrades_whole_diagram(self):
+        src = 'pie bogus\n    "A" : 1\n'
+        title, items = parse_pie(src)
+        self.assertIsNone(title)
+        self.assertEqual(items, [])
+
     def test_empty_pie_yields_no_items(self):
         _, items = parse_pie("pie\n")
         self.assertEqual(items, [])
