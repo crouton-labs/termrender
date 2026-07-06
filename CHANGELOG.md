@@ -1,6 +1,37 @@
 # CHANGELOG
 
 
+## v4.6.0 (2026-07-06)
+
+### Features
+
+- Add flowchart node shapes, subgraph frames, and direction rendering
+  ([`e872199`](https://github.com/crouton-labs/termrender/commit/e87219956294319feb0015d2cf4573b8cc60a0cb))
+
+Applies and hardens the salvaged decoration work for the native mermaid flowchart renderer's layout
+  engine:
+
+- Nine distinct node-shape borders (rect, round, stadium, cylinder, circle, diamond, hexagon,
+  subroutine, parallelogram), each reserving its full bounding box so the router treats every shape
+  as impassable. - Subgraph enclosure frames (left-anchored title, nested, flatten when members
+  aren't placed contiguously enough for a clean rect). - TB/BT/LR/RL direction handling via a
+  post-layout coordinate transform.
+
+Fixes found while hardening: - draw_frame now reserves the title text cells (not the whole border)
+  so a cross-boundary edge crossing a frame's top border can no longer clobber a letter of the
+  subgraph title. - Subgraph frame sizing is now computed bottom-up (_build_subgraph_frames): a
+  parent subgraph's extent is built from its children's *padded frame rects* (when they get a frame)
+  rather than raw member extents, so a nested subgraph whose members share the same column/row span
+  as its parent no longer produces an identically-sized frame that overwrites the parent's border —
+  nesting now always has real margin. - Corrected the module docstring's stale "every node renders
+  as a plain rectangle, frames not yet wired" description to match the shipped shape/frame drawers.
+
+Adds tests/test_mermaid_flow_shapes.py: real-geometry assertions for shape distinctness, a 9-shape
+  gallery, subgraph frame containment, nested-frame non-overlap, non-contiguous-subgraph flatten,
+  LR/RL/BT topology + arrowhead direction, LR same-rank spacing, and router avoidance of a diamond's
+  interior. Full suite: 437 passed (422 existing + 15 new), no regressions.
+
+
 ## v4.5.0 (2026-07-06)
 
 ### Features
