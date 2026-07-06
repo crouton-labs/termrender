@@ -1,6 +1,26 @@
 # CHANGELOG
 
 
+## v4.3.2 (2026-07-06)
+
+### Bug Fixes
+
+- **mermaid**: Strip %% comments/directives from journey/mindmap/timeline
+  ([`d61f113`](https://github.com/crouton-labs/termrender/commit/d61f113cf750c9379f00825e2f6fc7b3898e7b8f))
+
+The dispatcher (mermaid.py) only used strip_prelude_lines() for type sniffing, then passed the
+  untouched original source to the native renderers, so a leading %%{init}%% directive or a mid-body
+  %% comment leaked into rendered output as fake tree nodes, task rows, or timeline events in the
+  journey/mindmap/timeline renderers.
+
+- mermaid.py: pass prelude-stripped source to the three native renderers; the Go-binary fallback
+  path keeps receiving the raw source untouched. - mermaid_journey.py, mermaid_mindmap.py,
+  mermaid_timeline.py: skip %%-prefixed lines anywhere in the body, not just the leading prelude,
+  mirroring mermaid_sequence.py's existing handling.
+
+Adds regression tests pinning each confirmed repro to render nothing from the comment/directive.
+
+
 ## v4.3.1 (2026-07-06)
 
 ### Bug Fixes
