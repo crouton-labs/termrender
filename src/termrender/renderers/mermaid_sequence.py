@@ -44,6 +44,12 @@ Known degradations (by design, not bugs)
   Go-backed renderer's ``Note`` preprocessing.
 - Participants are never created/destroyed mid-diagram; every lifeline
   spans the full height of the diagram.
+- Column/row placement is character-index-based, not visual-width-based
+  (``_Row`` indexes by ``len()``, not ``visual_len()``); wide (CJK/full-width)
+  participant labels or message text will misalign columns. This mirrors
+  the pre-existing ``wrap_text()`` CJK limitation elsewhere in termrender
+  (see the root CLAUDE.md); fixing it here requires the same visual-width
+  rework, out of scope for this renderer alone.
 """
 
 from __future__ import annotations
@@ -125,8 +131,16 @@ _BLOCK_END_RE = re.compile(r"^end\s*$", re.IGNORECASE)
 # picks the arrowhead. Handles all 8 combinations: ->, -->, ->>, -->>, -x,
 # --x, -), --). An optional +/- right after the arrow (activate/deactivate
 # shorthand) is captured and discarded.
+#
+# Identifiers deliberately exclude '-' (and ':', '+', whitespace): dash is
+# reserved for the arrow itself, so an id token is the maximal run up to the
+# first dash. Without this exclusion, non-mermaid dash punctuation next to a
+# real arrow char (e.g. "A-.->B", a flowchart-only dotted arrow with no
+# sequence-diagram equivalent) gets silently absorbed into the id instead of
+# failing to match and degrading to a plain line.
+_ID = r"[^\s:+-]+"
 _ARROW_RE = re.compile(
-    r"^(\S+?)\s*(-{1,2})(>>|>|x|\))\s*([+-]?)(\S+)\s*:\s*(.*)$"
+    rf"^({_ID})\s*(-{{1,2}})(>>|>|x|\))\s*([+-]?)({_ID})\s*:\s*(.*)$"
 )
 
 _HEAD_KIND = {">>": "filled", ">": "open", "x": "lost", ")": "async"}

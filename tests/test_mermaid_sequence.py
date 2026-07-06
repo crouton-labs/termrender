@@ -375,6 +375,33 @@ class TestDegradationCases(unittest.TestCase):
         lines = render_sequence(src, 80)  # must not raise
         self.assertFalse(any("%%" in l for l in lines))
 
+    def test_flowchart_only_dotted_arrow_does_not_spawn_bogus_participant(self):
+        # "-.->"" is a flowchart-only arrow with no sequence-diagram
+        # equivalent; it must not be mis-absorbed into an id (e.g. "A-.")
+        # by the arrow regex — it should degrade to a plain line instead.
+        src = (
+            "sequenceDiagram\n"
+            "    participant A\n"
+            "    participant B\n"
+            "    A-.->B: unsupported dotted arrow\n"
+        )
+        lines = render_sequence(src, 80)  # must not raise
+        header = lines[1]
+        self.assertNotIn("A-.", header)
+        self.assertIn("unsupported dotted arrow", "\n".join(lines))
+
+    def test_unknown_punctuation_arrow_degrades_to_plain_line(self):
+        src = (
+            "sequenceDiagram\n"
+            "    participant A\n"
+            "    participant B\n"
+            "    A==>>B: also weird\n"
+        )
+        lines = render_sequence(src, 80)  # must not raise
+        header = lines[1]
+        self.assertNotIn("A==", header)
+        self.assertIn("A==>>B: also weird", "\n".join(lines))
+
 
 class TestMultiHopSpacing(unittest.TestCase):
 
