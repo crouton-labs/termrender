@@ -78,7 +78,7 @@ Document format
   :::divider{label=""}                    labeled horizontal rule
   :::code{lang=""}                        syntax-highlighted block (``` fences also work)
   :::quote{author=""}                     attributed block quote
-  :::mermaid                             flowchart → ASCII (NOT ```mermaid fences)
+  :::mermaid                             flowchart → ASCII (``` mermaid fences also work)
 """
 
 _DOC_RENDER_HELP = """\

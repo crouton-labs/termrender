@@ -303,10 +303,21 @@ def _convert_ast(nodes: list[dict], _depth: int = 0) -> list[Block]:
         elif ntype == "block_code":
             raw = node.get("raw", "")
             info = node.get("attrs", {}).get("info", "")
-            blocks.append(Block(
-                type=BlockType.CODE,
-                attrs={"lang": info, "source": raw},
-            ))
+            # A ```mermaid fence is GFM's standard way to tag a mermaid diagram
+            # (GitHub, and most docs/agents that don't know this project's
+            # :::mermaid directive, use this form) — route it through the
+            # mermaid renderer same as :::mermaid, instead of a plain code panel.
+            lang = info.split()[0].lower() if info.split() else ""
+            if lang == "mermaid":
+                blocks.append(Block(
+                    type=BlockType.MERMAID,
+                    attrs={"source": raw},
+                ))
+            else:
+                blocks.append(Block(
+                    type=BlockType.CODE,
+                    attrs={"lang": info, "source": raw},
+                ))
 
         elif ntype == "list":
             ordered = node.get("attrs", {}).get("ordered", False)

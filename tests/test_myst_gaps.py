@@ -7,7 +7,7 @@ from termrender.parser import parse, _strip_options
 
 
 class TestMermaidDirective(unittest.TestCase):
-    """:::mermaid is the only fence form for mermaid diagrams."""
+    """:::mermaid and ```mermaid fences both produce mermaid diagrams."""
 
     def test_basic_mermaid_directive(self):
         """:::mermaid\ngraph LR\nA-->B\n::: → BlockType.MERMAID"""
@@ -26,12 +26,12 @@ class TestMermaidDirective(unittest.TestCase):
         self.assertIn("graph LR", block.attrs["source"])
         self.assertNotIn(":title:", block.attrs["source"])
 
-    def test_backtick_mermaid_is_plain_code_block(self):
-        """```mermaid is no longer a mermaid block — it renders as a code block."""
+    def test_backtick_mermaid_is_mermaid_block(self):
+        """```mermaid fences route through the mermaid renderer, same as :::mermaid."""
         doc = parse("```mermaid\ngraph LR\nA-->B\n```")
         block = doc.children[0]
-        self.assertEqual(block.type, BlockType.CODE)
-        self.assertEqual(block.attrs.get("lang"), "mermaid")
+        self.assertEqual(block.type, BlockType.MERMAID)
+        self.assertIn("graph LR", block.attrs["source"])
 
     def test_backtick_directive_is_plain_code_block(self):
         """```{panel} is no longer a directive — it renders as a code block."""

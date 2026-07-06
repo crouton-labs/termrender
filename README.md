@@ -380,7 +380,7 @@ Horizontal rules with optional centered labels.
 
 ### Mermaid diagrams
 
-Renders mermaid flowcharts as ASCII art via [mermaid-ascii](https://github.com/mermaid-js/mermaid-ascii). Mermaid uses the `:::mermaid` directive — backtick fences (`` ```mermaid ``) are treated as plain code blocks.
+Renders mermaid flowcharts as ASCII art via [mermaid-ascii](https://github.com/mermaid-js/mermaid-ascii). Use the `:::mermaid` directive, or a standard GFM ` ```mermaid ` fenced code block — both render the same diagram.
 
 **Input:**
 ```markdown
