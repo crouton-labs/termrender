@@ -190,6 +190,36 @@ class TestMermaidDispatch(unittest.TestCase):
         self.assertIn("Launch", joined)
         self.assertIn("●", joined)
 
+    def test_init_directive_does_not_leak_into_journey_output(self):
+        # Regression: the dispatcher must pass prelude-stripped source to
+        # the native journey renderer, not just use the prelude for sniffing.
+        src = (
+            '%%{init: {"theme": "dark"}}%%\n'
+            "journey\n"
+            "  title T\n"
+            "  section S\n"
+            "    Task: 4: Me\n"
+        )
+        joined = "\n".join(mermaid.render_mermaid_lines(src, 60))
+        self.assertNotIn("init", joined)
+        self.assertNotIn("theme", joined)
+        self.assertNotIn("%%", joined)
+        self.assertIn("Task", joined)
+
+    def test_init_directive_does_not_leak_into_mindmap_output(self):
+        src = '%%{init: {"theme": "dark"}}%%\nmindmap\n  root\n    Origins\n'
+        joined = "\n".join(mermaid.render_mermaid_lines(src, 60))
+        self.assertNotIn("init", joined)
+        self.assertNotIn("%%", joined)
+        self.assertIn("Origins", joined)
+
+    def test_init_directive_does_not_leak_into_timeline_output(self):
+        src = '%%{init: {"theme": "dark"}}%%\ntimeline\n    2024 : Launch\n'
+        joined = "\n".join(mermaid.render_mermaid_lines(src, 60))
+        self.assertNotIn("init", joined)
+        self.assertNotIn("%%", joined)
+        self.assertIn("Launch", joined)
+
 
 if __name__ == "__main__":
     unittest.main()

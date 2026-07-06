@@ -59,6 +59,29 @@ class TestParseJourney(unittest.TestCase):
         parsed = parse_journey("journey\n    title Empty Journey\n")
         self.assertEqual(parsed["sections"], [])
 
+    def test_init_directive_before_header_skipped(self):
+        parsed = parse_journey(
+            '%%{init: {"theme": "dark"}}%%\n'
+            "journey\n"
+            "    title T\n"
+            "    section S\n"
+            "    Task: 4: Me\n"
+        )
+        self.assertEqual(parsed["title"], "T")
+        self.assertEqual(len(parsed["sections"]), 1)
+        self.assertEqual(parsed["sections"][0]["tasks"], [{"name": "Task", "score": 4, "actors": ["Me"]}])
+
+    def test_mid_body_comment_skipped(self):
+        parsed = parse_journey(
+            "journey\n"
+            "    section S\n"
+            "    Task: 4: Me\n"
+            "    %% mid comment: 3: X\n"
+            "    Other: 2: Me\n"
+        )
+        names = [t["name"] for t in parsed["sections"][0]["tasks"]]
+        self.assertEqual(names, ["Task", "Other"])
+
 
 class TestRenderJourney(unittest.TestCase):
 
@@ -122,6 +145,40 @@ class TestRenderJourney(unittest.TestCase):
         for ln in out.split("\n"):
             if ln:
                 self.assertEqual(visual_len(ln), 50)
+
+    def test_init_directive_produces_no_fake_task_row(self):
+        # Regression: a leading %%{init}%% directive must not leak into the
+        # rendered output as a garbled task row.
+        src = (
+            '%%{init: {"theme": "dark"}}%%\n'
+            "journey\n"
+            "  title T\n"
+            "  section S\n"
+            "    Task: 4: Me\n"
+        )
+        lines = render_journey(src, width=40)
+        joined = "\n".join(lines)
+        self.assertNotIn("init", joined)
+        self.assertNotIn("theme", joined)
+        self.assertNotIn("%%", joined)
+        self.assertIn("Task", joined)
+
+    def test_mid_body_comment_produces_no_fake_task_row(self):
+        # Regression: a %% comment line anywhere in the body must not
+        # render as a task with stars.
+        src = (
+            "journey\n"
+            "    section S\n"
+            "    Task: 4: Me\n"
+            "    %% mid comment: 3: X\n"
+            "    Other: 2: Me\n"
+        )
+        lines = render_journey(src, width=40)
+        joined = "\n".join(lines)
+        self.assertNotIn("comment", joined)
+        self.assertNotIn("%%", joined)
+        self.assertIn("Task", joined)
+        self.assertIn("Other", joined)
 
 
 if __name__ == "__main__":

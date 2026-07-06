@@ -139,6 +139,16 @@ def _first_line_type(source: str) -> str:
     return first.lower()
 
 
+def _stripped(source: str) -> str:
+    """Return ``source`` with its leading prelude (comments/directives/
+    frontmatter) removed, for native renderers that don't otherwise skip it.
+
+    The Go-binary fallback path (``_render_via_binary``) must keep receiving
+    the untouched original source — its behavior stays byte-for-byte.
+    """
+    return "\n".join(strip_prelude_lines(source.splitlines()))
+
+
 def _render_via_binary(source: str) -> str:
     """Render via the vendored mermaid-ascii binary, falling back to source.
 
@@ -182,11 +192,11 @@ def render_mermaid_lines(source: str, width: int) -> list[str]:
     if diagram_type.startswith("sequencediagram"):
         return mermaid_sequence.render_sequence(source, width)
     if diagram_type.startswith("mindmap"):
-        return mermaid_mindmap.render(source, width)
+        return mermaid_mindmap.render(_stripped(source), width)
     if diagram_type.startswith("journey"):
-        return mermaid_journey.render(source, width)
+        return mermaid_journey.render(_stripped(source), width)
     if diagram_type.startswith("timeline"):
-        return mermaid_timeline.render(source, width)
+        return mermaid_timeline.render(_stripped(source), width)
     return _render_via_binary(source).split("\n")
 
 

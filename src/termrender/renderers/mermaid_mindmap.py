@@ -64,12 +64,14 @@ def _node_label(text: str) -> str:
 def parse_mindmap(source: str) -> str:
     """Parse mermaid mindmap syntax into ``tree.py``'s plain indented format.
 
-    Drops the ``mindmap`` header line and any ``::icon(...)``/``:::class``
-    decoration lines (termrender's tree has no icon/class concept); every
-    other line's original indentation is preserved (depth comes from
-    indentation, exactly as ``tree.py`` already expects) with its node-shape
-    delimiters stripped down to label text. Returns the transformed
-    multi-line indented string, empty if nothing survived.
+    Drops the ``mindmap`` header line, any ``%%`` comment/directive line
+    (wherever it appears in the body, not just in the leading prelude), and
+    any ``::icon(...)``/``:::class`` decoration lines (termrender's tree has
+    no icon/class concept); every other line's original indentation is
+    preserved (depth comes from indentation, exactly as ``tree.py`` already
+    expects) with its node-shape delimiters stripped down to label text.
+    Returns the transformed multi-line indented string, empty if nothing
+    survived.
     """
     out_lines: list[str] = []
     for raw_line in source.splitlines():
@@ -78,6 +80,8 @@ def parse_mindmap(source: str) -> str:
         if _HEADER_RE.match(raw_line):
             continue
         stripped = raw_line.strip()
+        if stripped.startswith("%%"):
+            continue
         if _ICON_RE.match(stripped) or _CLASS_RE.match(stripped):
             continue
         indent = raw_line[: len(raw_line) - len(raw_line.lstrip(" "))]

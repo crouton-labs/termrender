@@ -40,7 +40,8 @@ def parse_journey(source: str) -> dict:
     still captured with ``score=None``; a non-numeric score is likewise
     tolerated (``score=None``) rather than raising. A task line before any
     ``section`` header lands in an unnamed leading section. Sections with
-    no tasks are dropped.
+    no tasks are dropped. ``%%`` comment and directive lines are skipped
+    wherever they appear in the body, not just in the leading prelude.
 
     Returns ``{"title": str | None, "sections": [{"name": str | None,
     "tasks": [{"name": str, "score": int | None, "actors": list[str]}]}]}``.
@@ -50,6 +51,8 @@ def parse_journey(source: str) -> dict:
 
     for line in source.splitlines():
         if not line.strip() or _HEADER_RE.match(line):
+            continue
+        if line.strip().startswith("%%"):
             continue
 
         m = _TITLE_RE.match(line)

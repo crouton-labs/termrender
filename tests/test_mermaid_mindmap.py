@@ -66,6 +66,18 @@ class TestParseMindmap(unittest.TestCase):
     def test_only_header_yields_empty(self):
         self.assertEqual(parse_mindmap("mindmap\n"), "")
 
+    def test_indented_comment_line_dropped(self):
+        out = parse_mindmap("mindmap\n  root\n    %% a comment\n    Origins\n")
+        self.assertNotIn("comment", out)
+        self.assertNotIn("%%", out)
+        self.assertIn("Origins", out)
+
+    def test_init_directive_before_header_dropped(self):
+        out = parse_mindmap('%%{init: {"theme": "dark"}}%%\nmindmap\n  root\n    Origins\n')
+        self.assertNotIn("init", out)
+        self.assertNotIn("%%", out)
+        self.assertIn("Origins", out)
+
 
 class TestRenderMindmap(unittest.TestCase):
 
@@ -109,6 +121,16 @@ class TestRenderMindmap(unittest.TestCase):
         for ln in out.split("\n"):
             if ln:
                 self.assertEqual(visual_len(ln), 45)
+
+    def test_indented_comment_produces_no_fake_tree_node(self):
+        # Regression: an indented %% comment line must not render as a
+        # tree node.
+        src = "mindmap\n  root\n    %% a comment\n    Origins\n"
+        lines = render_mindmap(src, width=40)
+        joined = "\n".join(lines)
+        self.assertNotIn("comment", joined)
+        self.assertNotIn("%%", joined)
+        self.assertIn("Origins", joined)
 
 
 if __name__ == "__main__":

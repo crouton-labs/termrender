@@ -53,6 +53,23 @@ class TestParseTimeline(unittest.TestCase):
         parsed = parse_timeline("timeline\n    title Empty\n")
         self.assertEqual(parsed["sections"], [])
 
+    def test_comment_line_skipped(self):
+        parsed = parse_timeline(
+            "timeline\n    2002 : LinkedIn\n    %% comment : fake\n    2004 : Facebook\n"
+        )
+        entries = parsed["sections"][0]["entries"]
+        self.assertEqual(
+            entries,
+            [{"date": "2002", "event": "LinkedIn"}, {"date": "2004", "event": "Facebook"}],
+        )
+
+    def test_init_directive_before_header_skipped(self):
+        parsed = parse_timeline(
+            '%%{init: {"theme": "dark"}}%%\ntimeline\n    2002 : LinkedIn\n'
+        )
+        entries = parsed["sections"][0]["entries"]
+        self.assertEqual(entries, [{"date": "2002", "event": "LinkedIn"}])
+
 
 class TestRenderTimeline(unittest.TestCase):
 
@@ -101,6 +118,17 @@ class TestRenderTimeline(unittest.TestCase):
         for ln in out.split("\n"):
             if ln:
                 self.assertEqual(visual_len(ln), 50)
+
+    def test_comment_produces_no_fake_timeline_event(self):
+        # Regression: a %% comment line must not render as a timeline event.
+        src = "timeline\n    2002 : LinkedIn\n    %% comment : fake\n    2004 : Facebook\n"
+        lines = render_timeline(src, width=40)
+        joined = "\n".join(lines)
+        self.assertNotIn("comment", joined)
+        self.assertNotIn("fake", joined)
+        self.assertNotIn("%%", joined)
+        self.assertIn("LinkedIn", joined)
+        self.assertIn("Facebook", joined)
 
 
 if __name__ == "__main__":

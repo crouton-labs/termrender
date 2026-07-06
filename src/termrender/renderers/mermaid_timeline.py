@@ -44,7 +44,8 @@ def parse_timeline(source: str) -> dict:
 
     Returns ``{"title": str | None, "sections": [{"name": str | None,
     "entries": [{"date": str, "event": str}]}]}``. Sections with no
-    entries are dropped.
+    entries are dropped. ``%%`` comment and directive lines are skipped
+    wherever they appear in the body, not just in the leading prelude.
     """
     title: str | None = None
     sections: list[dict] = [{"name": None, "entries": []}]
@@ -52,6 +53,8 @@ def parse_timeline(source: str) -> dict:
 
     for line in source.splitlines():
         if not line.strip() or _HEADER_RE.match(line):
+            continue
+        if line.strip().startswith("%%"):
             continue
 
         m = _TITLE_RE.match(line)
