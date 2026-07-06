@@ -40,6 +40,15 @@ class TestParsePie(unittest.TestCase):
         _, items = parse_pie("pie\n")
         self.assertEqual(items, [])
 
+    def test_title_inline_on_header_line(self):
+        title, items = parse_pie('pie title Pets\n  "Dogs": 42\n')
+        self.assertEqual(title, "Pets")
+        self.assertEqual(items, [{"label": "Dogs", "value": 42.0}])
+
+    def test_title_inline_after_showdata(self):
+        title, _ = parse_pie('pie showData title Pets\n  "Dogs": 1\n')
+        self.assertEqual(title, "Pets")
+
 
 class TestRenderPie(unittest.TestCase):
 
@@ -90,3 +99,4 @@ class TestRenderPie(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

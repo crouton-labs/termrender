@@ -22,7 +22,7 @@ from termrender.renderers.charts import render_bar
 
 _TITLE_RE = re.compile(r"^\s*title\s+(.*\S)\s*$", re.IGNORECASE)
 _DATA_RE = re.compile(r'^\s*"([^"]*)"\s*:\s*(-?\d+(?:\.\d+)?)\s*$')
-_HEADER_RE = re.compile(r"^\s*pie\b", re.IGNORECASE)
+_HEADER_RE = re.compile(r"^\s*pie\b(?:\s+showData\b)?\s*(.*)$", re.IGNORECASE)
 
 
 def parse_pie(source: str) -> tuple[str | None, list[dict]]:
@@ -38,7 +38,13 @@ def parse_pie(source: str) -> tuple[str | None, list[dict]]:
     for line in source.splitlines():
         if not line.strip():
             continue
-        if _HEADER_RE.match(line):
+        m = _HEADER_RE.match(line)
+        if m:
+            # Mermaid allows the title inline on the header line:
+            # ``pie title X`` / ``pie showData title X``.
+            tm = _TITLE_RE.match(m.group(1))
+            if tm:
+                title = tm.group(1)
             continue
         m = _TITLE_RE.match(line)
         if m:
