@@ -1,6 +1,55 @@
 # CHANGELOG
 
 
+## v4.2.0 (2026-07-06)
+
+### Bug Fixes
+
+- **mermaid-sequence**: Reject dash-adjacent punctuation as part of an id
+  ([`612f36d`](https://github.com/crouton-labs/termrender/commit/612f36d14d68e6c51f4ac6d16f0ae837e44ddd01))
+
+Reviewer found: near-miss arrow syntax with no sequence-diagram equivalent (e.g. flowchart-only
+  `A-.->B`, or garbage like `A==>>B`) was silently absorbed into the source id ("A-.") instead of
+  degrading to a plain line, because the arrow regex's identifier token was \S+/\S+? (anything
+  non-space) and would backtrack through dash/dot punctuation until some later '>' happened to
+  complete a valid-looking arrow.
+
+Fix: identifiers now exclude '-' (plus ':', '+', whitespace) — dash is reserved for the arrow
+  itself, so an id is the maximal run up to the first dash, eliminating the backtracking ambiguity
+  entirely. Also documents the pre-existing (accepted, mirrors wrap_text()'s CJK bug elsewhere in
+  termrender) character-index vs visual-width limitation in the module docstring, per independent
+  review (non-blocking, not fixed here — same class of fix as the documented wrap_text() constraint,
+  out of proportion for a renderer not yet wired into the dispatcher).
+
+Adds 2 regression tests for the repro cases. 191 tests pass (full suite, up from 189).
+
+### Features
+
+- Add native ASCII sequence-diagram renderer for mermaid
+  ([`ad63977`](https://github.com/crouton-labs/termrender/commit/ad639774edcbcd744ba7f2183c4f5d8c83630af0))
+
+Standalone module (src/termrender/renderers/mermaid_sequence.py) exposing render_sequence(source,
+  width) -> list[str]. Not wired into the mermaid.py dispatcher yet (a later integration phase owns
+  that).
+
+Layout: participant boxes across the top/bottom, vertical lifelines, messages as horizontal arrows
+  in declaration order, self-messages as a loop-back. Column spacing is a 1D constraint pass driven
+  by participant label widths and the messages crossing each gap (no 2D layout search needed since
+  message order already fixes the vertical axis).
+
+Grammar: participant/actor with 'as' aliases plus implicit participants from first use; all 8 arrow
+  forms (->, -->, ->>, -->>, -x, --x, -), --)) with distinct line style (solid/dashed) and arrowhead
+  glyph per marker; Note over/left of/right of; autonumber (start/step); loop/alt/opt/par/
+  critical/break/rect/box render as labeled separator bands (else/and/ option as mid-band
+  separators); activate/deactivate (including the +/- arrow shorthand) and <br/> are tolerated and
+  flattened; any other unrecognized or malformed line (stray else/end, unknown directives) degrades
+  to a plain text line rather than raising.
+
+Tests: tests/test_mermaid_sequence.py, 40 cases covering golden output, all arrow variants, aliases,
+  implicit participant ordering, notes, autonumber, block nesting, degradation paths, and the
+  no-trailing-whitespace contract. Full suite (189 tests) still green.
+
+
 ## v4.1.1 (2026-07-06)
 
 ### Bug Fixes
