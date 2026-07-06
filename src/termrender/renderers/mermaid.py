@@ -7,6 +7,7 @@ import subprocess
 
 from termrender._mermaid_bin import mermaid_ascii_bin
 from termrender.blocks import Block
+from termrender.renderers import mermaid_gantt, mermaid_pie
 from termrender.style import visual_ljust
 
 
@@ -116,6 +117,59 @@ def preprocess_mermaid_for_ascii(source: str) -> str:
     return "\n".join(out)
 
 
+def _first_line_type(source: str) -> str:
+    """Return the lowercased first non-blank line's leading keyword.
+
+    This is the dispatch key: mermaid identifies a diagram's type from its
+    first line (``graph``/``flowchart``, ``pie``, ``gantt``, ``sequenceDiagram``,
+    ``classDiagram``, …). Returns ``""`` for an empty/blank source.
+    """
+    first = next((l.strip() for l in source.splitlines() if l.strip()), "")
+    return first.lower()
+
+
+def _render_via_binary(source: str) -> str:
+    """Render via the vendored mermaid-ascii binary, falling back to source.
+
+    This is the pre-existing path for every type without a native Python
+    renderer (flowchart/graph, sequence, class, state, ER, …): normalize
+    what mermaid-ascii can parse, shell out, and undo its Latin-1
+    double-encoding. Any failure (missing binary, timeout, non-zero exit,
+    a parser panic on unsupported input) degrades to the raw source text —
+    mermaid-ascii has no notion of "partial" output, so there is no middle
+    ground between a full render and falling back.
+    """
+    try:
+        result = subprocess.run(
+            [mermaid_ascii_bin(), "-f", "-", "-y", "1"],
+            input=preprocess_mermaid_for_ascii(source),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+        return fix_mermaid_encoding(result.stdout)
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return source
+
+
+def render_mermaid_lines(source: str, width: int) -> list[str]:
+    """Dispatch a mermaid source to its type's renderer and return raw lines.
+
+    ``pie`` and ``gantt`` get dedicated native Python renderers. Every other
+    type (flowchart/graph, sequence, class, state, ER, journey, mindmap, …)
+    keeps today's exact path: the vendored Go mermaid-ascii binary, which
+    echoes unparseable/unsupported source back verbatim. Lines are returned
+    unpadded; callers apply width padding uniformly.
+    """
+    diagram_type = _first_line_type(source)
+    if diagram_type.startswith("pie"):
+        return mermaid_pie.render(source, width)
+    if diagram_type.startswith("gantt"):
+        return mermaid_gantt.render(source, width)
+    return _render_via_binary(source).split("\n")
+
+
 def render(block: Block, color: bool) -> list[str]:
     """Render a mermaid diagram from pre-rendered or on-the-fly ASCII output."""
     w = block.width
@@ -123,20 +177,8 @@ def render(block: Block, color: bool) -> list[str]:
 
     if rendered is None:
         source = block.attrs.get("source", "")
-        try:
-            result = subprocess.run(
-                [mermaid_ascii_bin(), "-f", "-", "-y", "1"],
-                input=preprocess_mermaid_for_ascii(source),
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            rendered = fix_mermaid_encoding(result.stdout)
-        except Exception:
-            rendered = source
+        raw_lines = render_mermaid_lines(source, w or 60)
+    else:
+        raw_lines = rendered.split("\n")
 
-    lines: list[str] = []
-    for raw_line in rendered.split("\n"):
-        lines.append(visual_ljust(raw_line, w))
-
-    return lines
+    return [visual_ljust(raw_line, w) for raw_line in raw_lines]

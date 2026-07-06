@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import subprocess
-
-from termrender._mermaid_bin import mermaid_ascii_bin
 from termrender.blocks import Block, BlockType
-from termrender.renderers.mermaid import fix_mermaid_encoding, preprocess_mermaid_for_ascii
+from termrender.renderers.mermaid import render_mermaid_lines
 from termrender.style import wrap_text, visual_len
 
 
@@ -145,21 +142,9 @@ def resolve_height(block: Block) -> None:
 
     elif bt == BlockType.MERMAID:
         source = block.attrs.get("source", "") or _plain_text(block.text)
-        rendered = source  # fallback
-        try:
-            result = subprocess.run(
-                [mermaid_ascii_bin(), "-f", "-", "-y", "1"],
-                input=preprocess_mermaid_for_ascii(source),
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=30,
-            )
-            rendered = fix_mermaid_encoding(result.stdout)
-        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-            pass
-        block.attrs["_rendered"] = rendered
-        block.height = len(rendered.split("\n")) if rendered else 1
+        lines = render_mermaid_lines(source, width)
+        block.attrs["_rendered"] = "\n".join(lines)
+        block.height = len(lines) if lines else 1
 
     elif bt == BlockType.QUOTE:
         block.height = sum(c.height or 0 for c in block.children) + (1 if block.attrs.get("author") or block.attrs.get("by") else 0)
