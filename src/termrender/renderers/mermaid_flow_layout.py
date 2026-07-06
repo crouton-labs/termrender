@@ -42,12 +42,25 @@ direction. A cyclic :class:`FlowGraph` (e.g. ``A->B->C->A``) lays out and
 renders without any manual cycle-breaking — confirmed empirically against
 grandalf 0.8 (see the design doc's "grandalf adapter recipe" section).
 
-Edge routing
-------------
-This module renders every node as a bordered **rectangle** regardless of its
-declared :class:`NodeShape` — distinct shape borders (diamond, round,
-stadium, circle, ...) and subgraph frames (:meth:`Canvas.draw_frame` exists
-but :func:`layout_flowgraph` does not yet call it) are a later phase.
+Shapes and subgraph frames
+---------------------------
+Each node is rasterized by a shape-specific :class:`Canvas` drawer keyed off
+its declared :class:`NodeShape`: ``DIAMOND`` and ``PARALLELOGRAM`` taper on
+slant glyphs (╱╲), ``ROUND``/``STADIUM``/``CIRCLE`` share a rounded-corner
+(╭╮╰╯) border (``CIRCLE`` sized wider so it reads as an oval), ``CYLINDER``
+pairs a rounded top cap with a square bottom, ``HEXAGON`` cuts its four
+corners on the diagonal, and ``SUBROUTINE`` adds an inner double-bar side —
+``RECT`` (and any shape whose box is too small for its own drawer's minimum
+dimensions) falls back to the plain rectangle border. Every drawer reserves
+its full bounding box (see :meth:`Canvas.draw_box`), so the router treats
+every shape as an impassable rectangle regardless of its visual outline.
+``subgraph`` blocks are drawn as enclosing frames via :meth:`Canvas.draw_frame`
+(bottom-up bounding rect of their members plus padding, left-anchored title,
+nesting handled by :func:`_build_subgraph_frames`) when their members are
+placed contiguously enough for a clean rect; otherwise the subgraph flattens
+(no frame, members still drawn) rather than draw a frame that visually
+claims a non-member node. Frames are drawn first (behind), then node boxes,
+then edges.
 
 Edges get the full orthogonal router. Per edge, endpoint anchors are chosen
 by the two boxes' *relative rank position* (their spans along the rank axis
@@ -100,6 +113,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from typing import Callable
 
 from grandalf.graphs import Edge, Graph, Vertex
 from grandalf.layouts import SugiyamaLayout, VertexViewer
@@ -111,6 +125,7 @@ from termrender.renderers.mermaid_flow_model import (
     FlowGraph,
     FlowNode,
     NodeShape,
+    Subgraph,
 )
 from termrender.style import visual_center, visual_len, wrap_text
 
@@ -223,15 +238,57 @@ class Canvas:
     def draw_box(self, rect: "BoxRect", shape: NodeShape, label: str) -> None:
         """Draw a bordered box + centered wrapped label; reserve every cell.
 
-        ``shape`` is accepted for interface stability with later phases —
-        this phase draws every shape as a plain rectangle (distinct shape
-        borders are a later phase's responsibility).
+        Dispatches to a shape-specific border drawer. Every drawer reserves
+        the *entire* bounding ``rect`` (border, interior, and any blank
+        corner cells outside a non-rectangular outline, e.g. a diamond's
+        tapered corners) so the router always treats the shape's full
+        bounding box as impassable — a deliberate over-reservation that
+        keeps every shape's anchor points (``top_mid``/``bottom_mid``/etc.,
+        defined on the bounding rect) meaningful and keeps routing safety
+        independent of each shape's exact visual outline.
         """
-        del shape
-        x, y, w, h = rect.x, rect.y, rect.w, rect.h
-        if w <= 0 or h <= 0:
+        if rect.w <= 0 or rect.h <= 0:
             return
+        drawer = _SHAPE_DRAWERS.get(shape, Canvas._draw_rect)
+        drawer(self, rect, label or "")
 
+    def _reserve_blank(self, rect: "BoxRect") -> None:
+        """Fill the whole bounding rect with reserved blanks — the common
+        first step for every shape drawer, so border glyphs then overlay a
+        fully-reserved surface regardless of how much of it stays blank."""
+        for cx in range(rect.x, rect.x + rect.w):
+            for cy in range(rect.y, rect.y + rect.h):
+                self.set_char(cx, cy, " ", reserve=True)
+
+    def _draw_wrapped_label(self, label: str, rows: list[tuple[int, int, int]]) -> None:
+        """Center ``label`` (word-wrapped, vertically centered) across a
+        list of ``(y, left_x, right_x)`` inclusive per-row spans, top to
+        bottom — the shared label-placement primitive every shape drawer
+        uses. Rows may vary in width (e.g. the parallelogram's per-row
+        skew); wrapping itself uses the narrowest row so no line overflows
+        whichever row it lands on.
+        """
+        if not rows:
+            return
+        inner_w = min(right - left + 1 for _, left, right in rows)
+        if inner_w <= 0:
+            return
+        lines = wrap_text(label, inner_w)
+        start = max(0, (len(rows) - len(lines)) // 2)
+        for i, line in enumerate(lines):
+            ridx = start + i
+            if ridx >= len(rows):
+                break
+            y, left, right = rows[ridx]
+            row_w = right - left + 1
+            centered = visual_center(line, row_w)
+            for j, ch in enumerate(centered):
+                self.set_char(left + j, y, ch, reserve=True)
+
+    def _draw_rect(self, rect: "BoxRect", label: str) -> None:
+        """``NodeShape.RECT`` — the plain bordered rectangle every other
+        shape falls back to when its own drawer declines (box too small)."""
+        x, y, w, h = rect.x, rect.y, rect.w, rect.h
         right, bottom = x + w - 1, y + h - 1
         self.set_char(x, y, "\u250c", reserve=True)
         self.set_char(right, y, "\u2510", reserve=True)
@@ -245,22 +302,201 @@ class Canvas:
             self.set_char(right, cy, "\u2502", reserve=True)
             for cx in range(x + 1, right):
                 self.set_char(cx, cy, " ", reserve=True)
+        if w - 2 > 0 and h - 2 > 0:
+            rows = [(cy, x + 1, right - 1) for cy in range(y + 1, bottom)]
+            self._draw_wrapped_label(label, rows)
 
-        inner_w, inner_h = w - 2, h - 2
-        if inner_w <= 0 or inner_h <= 0:
+    def _draw_rounded(self, rect: "BoxRect", label: str) -> None:
+        """``NodeShape.ROUND``/``STADIUM``/``CIRCLE`` — rounded ``\u256d\u256e\u2570\u256f`` corners.
+        CIRCLE reuses this exact border but is sized wider by
+        :func:`_box_dims` so it reads as an oval rather than a plain
+        rounded rect — the two shapes share a drawer, not a sizing formula.
+        """
+        x, y, w, h = rect.x, rect.y, rect.w, rect.h
+        if w < 2 or h < 2:
+            self._draw_rect(rect, label)
             return
-        lines = wrap_text(label or "", inner_w)
-        top_line = y + 1 + max(0, (inner_h - len(lines)) // 2)
-        for i, line in enumerate(lines[:inner_h]):
-            centered = visual_center(line, inner_w)
-            for j, ch in enumerate(centered):
-                self.set_char(x + 1 + j, top_line + i, ch, reserve=True)
+        right, bottom = x + w - 1, y + h - 1
+        self.set_char(x, y, "\u256d", reserve=True)
+        self.set_char(right, y, "\u256e", reserve=True)
+        self.set_char(x, bottom, "\u2570", reserve=True)
+        self.set_char(right, bottom, "\u256f", reserve=True)
+        for cx in range(x + 1, right):
+            self.set_char(cx, y, "\u2500", reserve=True)
+            self.set_char(cx, bottom, "\u2500", reserve=True)
+        for cy in range(y + 1, bottom):
+            self.set_char(x, cy, "\u2502", reserve=True)
+            self.set_char(right, cy, "\u2502", reserve=True)
+            for cx in range(x + 1, right):
+                self.set_char(cx, cy, " ", reserve=True)
+        if w - 2 > 0 and h - 2 > 0:
+            rows = [(cy, x + 1, right - 1) for cy in range(y + 1, bottom)]
+            self._draw_wrapped_label(label, rows)
+
+    def _draw_cylinder(self, rect: "BoxRect", label: str) -> None:
+        """``NodeShape.CYLINDER`` (``db``) — a rect with a curved top cap
+        (``\u256d\u2500\u256e``) and a square bottom, hinting at a database can without a full
+        second-ellipse bottom curve."""
+        x, y, w, h = rect.x, rect.y, rect.w, rect.h
+        if w < 2 or h < 2:
+            self._draw_rect(rect, label)
+            return
+        right, bottom = x + w - 1, y + h - 1
+        self.set_char(x, y, "\u256d", reserve=True)
+        self.set_char(right, y, "\u256e", reserve=True)
+        self.set_char(x, bottom, "\u2514", reserve=True)
+        self.set_char(right, bottom, "\u2518", reserve=True)
+        for cx in range(x + 1, right):
+            self.set_char(cx, y, "\u2500", reserve=True)
+            self.set_char(cx, bottom, "\u2500", reserve=True)
+        for cy in range(y + 1, bottom):
+            self.set_char(x, cy, "\u2502", reserve=True)
+            self.set_char(right, cy, "\u2502", reserve=True)
+            for cx in range(x + 1, right):
+                self.set_char(cx, cy, " ", reserve=True)
+        if w - 2 > 0 and h - 2 > 0:
+            rows = [(cy, x + 1, right - 1) for cy in range(y + 1, bottom)]
+            self._draw_wrapped_label(label, rows)
+
+    def _draw_subroutine(self, rect: "BoxRect", label: str) -> None:
+        """``NodeShape.SUBROUTINE`` — a rect with an inner ``\u2502`` bar just inside
+        each side, the classic double-border predefined-process look. Sized
+        two cells wider than a plain rect (see :func:`_box_dims`) so the
+        inner bars never eat into the label's own room."""
+        x, y, w, h = rect.x, rect.y, rect.w, rect.h
+        if w < 6 or h < 2:
+            self._draw_rect(rect, label)
+            return
+        right, bottom = x + w - 1, y + h - 1
+        self.set_char(x, y, "\u250c", reserve=True)
+        self.set_char(right, y, "\u2510", reserve=True)
+        self.set_char(x, bottom, "\u2514", reserve=True)
+        self.set_char(right, bottom, "\u2518", reserve=True)
+        for cx in range(x + 1, right):
+            self.set_char(cx, y, "\u2500", reserve=True)
+            self.set_char(cx, bottom, "\u2500", reserve=True)
+        for cy in range(y + 1, bottom):
+            self.set_char(x, cy, "\u2502", reserve=True)
+            self.set_char(right, cy, "\u2502", reserve=True)
+            self.set_char(x + 1, cy, "\u2502", reserve=True)
+            self.set_char(right - 1, cy, "\u2502", reserve=True)
+            for cx in range(x + 2, right - 1):
+                self.set_char(cx, cy, " ", reserve=True)
+        if right - 1 - (x + 2) >= 0 and h - 2 > 0:
+            rows = [(cy, x + 2, right - 2) for cy in range(y + 1, bottom)]
+            self._draw_wrapped_label(label, rows)
+
+    def _draw_hexagon(self, rect: "BoxRect", label: str) -> None:
+        """``NodeShape.HEXAGON`` — a rect with its four corner cells cut on the
+        diagonal (``\u2571``/``\u2572``), an octagon-ish silhouette that reads as angled
+        left/right sides without a full continuous-taper geometry."""
+        x, y, w, h = rect.x, rect.y, rect.w, rect.h
+        if w < 5 or h < 2:
+            self._draw_rect(rect, label)
+            return
+        right, bottom = x + w - 1, y + h - 1
+        self._reserve_blank(rect)
+        self.set_char(x + 1, y, "\u2571", reserve=True)
+        self.set_char(right - 1, y, "\u2572", reserve=True)
+        self.set_char(x + 1, bottom, "\u2572", reserve=True)
+        self.set_char(right - 1, bottom, "\u2571", reserve=True)
+        for cx in range(x + 2, right - 1):
+            self.set_char(cx, y, "\u2500", reserve=True)
+            self.set_char(cx, bottom, "\u2500", reserve=True)
+        for cy in range(y + 1, bottom):
+            self.set_char(x, cy, "\u2502", reserve=True)
+            self.set_char(right, cy, "\u2502", reserve=True)
+        if h - 2 > 0:
+            rows = [(cy, x + 1, right - 1) for cy in range(y + 1, bottom)]
+            self._draw_wrapped_label(label, rows)
+
+    def _draw_parallelogram(self, rect: "BoxRect", label: str) -> None:
+        """``NodeShape.PARALLELOGRAM`` — both vertical sides drawn with the
+        same slash direction (``\u2571``), shifted a little further right on
+        earlier (higher) rows than later ones, so the whole box leans —
+        the parallelogram look, as opposed to a diamond's opposite-facing
+        slants. Sized ``_PARALLELOGRAM_SKEW`` cells wider than the logical
+        content rect (see :func:`_box_dims`) to make room for the lean."""
+        x, y, w, h = rect.x, rect.y, rect.w, rect.h
+        logical_w = w - _PARALLELOGRAM_SKEW
+        if logical_w < 3 or h < 2:
+            self._draw_rect(rect, label)
+            return
+        self._reserve_blank(rect)
+        rows: list[tuple[int, int, int]] = []
+        for i in range(h):
+            cy = y + i
+            shift = (
+                round(_PARALLELOGRAM_SKEW * (h - 1 - i) / (h - 1)) if h > 1 else 0
+            )
+            left = x + shift
+            right = left + logical_w - 1
+            self.set_char(left, cy, "\u2571", reserve=True)
+            self.set_char(right, cy, "\u2571", reserve=True)
+            if i in (0, h - 1):
+                for cx in range(left + 1, right):
+                    self.set_char(cx, cy, "\u2500", reserve=True)
+            elif right - 1 >= left + 1:
+                rows.append((cy, left + 1, right - 1))
+        self._draw_wrapped_label(label, rows)
+
+    def _draw_diamond(self, rect: "BoxRect", label: str) -> None:
+        """``NodeShape.DIAMOND`` — a rhombus outline: ``taper`` rows of
+        corner-inset ``\u2571``/``\u2572`` sides above and below a flat label band,
+        where ``taper`` (derived from the label, see :func:`_diamond_taper`)
+        matches what :func:`_box_dims` sized the box for. Falls back to a
+        plain rect if the box is too small for any taper at all."""
+        x, y, w, h = rect.x, rect.y, rect.w, rect.h
+        if w < 5 or h < 3:
+            self._draw_rect(rect, label)
+            return
+        max_taper = max(1, (w - 1) // 2)
+        content_lines = wrap_text(label, max(w - 4, 1)) or [""]
+        taper = max(1, (h - len(content_lines)) // 2)
+        taper = min(taper, max_taper, (h - 1) // 2 or 1)
+        if h - 2 * taper < 1:
+            taper = max(1, (h - 1) // 2)
+        self._reserve_blank(rect)
+        right, bottom = x + w - 1, y + h - 1
+        rows: list[tuple[int, int, int]] = []
+        for i in range(h):
+            cy = y + i
+            if i < taper:
+                indent = taper - i
+            elif i >= h - taper:
+                indent = i - (h - taper) + 1
+            else:
+                indent = 0
+            left = x + indent
+            rgt = right - indent
+            if left > rgt:
+                continue
+            if indent == 0:
+                self.set_char(x, cy, "\u2502", reserve=True)
+                self.set_char(right, cy, "\u2502", reserve=True)
+                rows.append((cy, x + 1, right - 1))
+                continue
+            upper_half = i < taper
+            left_glyph = "\u2571" if upper_half else "\u2572"
+            right_glyph = "\u2572" if upper_half else "\u2571"
+            self.set_char(left, cy, left_glyph, reserve=True)
+            if rgt != left:
+                self.set_char(rgt, cy, right_glyph, reserve=True)
+        self._draw_wrapped_label(label, rows)
 
     def draw_frame(self, rect: "BoxRect", title: str) -> None:
         """Draw a subgraph enclosure: light border, left-anchored title.
 
         Frame cells are NOT reserved — nodes and edges live inside a
-        subgraph frame; only the four border runs are drawn.
+        subgraph frame and may legitimately cross its border lines (a
+        cross-boundary edge routing from a member to a non-member, or vice
+        versa, draws right over the top/bottom/side border runs, which
+        reads fine as an ordinary crossing). The title *text* is the one
+        exception: it is reserved so a crossing edge's line segment is
+        skipped there rather than clobbering a letter of the label — the
+        router already treats a skipped reserved cell as an acceptable
+        small gap in the line (the same tolerance it gives box interiors),
+        which is far less visually broken than corrupted title text.
         """
         x, y, w, h = rect.x, rect.y, rect.w, rect.h
         if w < 2 or h < 2:
@@ -277,6 +513,12 @@ class Canvas:
         for cy in range(y + 1, y + h - 1):
             self.set_char(x, cy, "\u2502")
             self.set_char(x + w - 1, cy, "\u2502")
+        if title:
+            title_start = x + 3
+            title_len = visual_len(title)
+            for i in range(title_len):
+                if title_start + i < x + w - 1:
+                    self.reserved[y][title_start + i] = True
 
     def _write_line_cell(self, x: int, y: int, bits: int, style: EdgeStyle) -> None:
         if self.is_reserved(x, y):
@@ -355,6 +597,21 @@ class Canvas:
         return lines
 
 
+# NodeShape -> Canvas border-drawer method, consulted by draw_box. RECT (and
+# any shape not listed here, defensively) falls back to _draw_rect.
+_SHAPE_DRAWERS: dict[NodeShape, "Callable[[Canvas, BoxRect, str], None]"] = {
+    NodeShape.RECT: Canvas._draw_rect,
+    NodeShape.ROUND: Canvas._draw_rounded,
+    NodeShape.STADIUM: Canvas._draw_rounded,
+    NodeShape.CIRCLE: Canvas._draw_rounded,
+    NodeShape.CYLINDER: Canvas._draw_cylinder,
+    NodeShape.SUBROUTINE: Canvas._draw_subroutine,
+    NodeShape.HEXAGON: Canvas._draw_hexagon,
+    NodeShape.PARALLELOGRAM: Canvas._draw_parallelogram,
+    NodeShape.DIAMOND: Canvas._draw_diamond,
+}
+
+
 @dataclass
 class BoxRect:
     """A placed node's rectangle: top-left cell + extents, plus border
@@ -395,16 +652,65 @@ _MAX_LABEL_CONTENT_WIDTH = 20
 _MIN_BOX_W = 5
 _MIN_BOX_H = 3
 
+# Per-shape extra cells added around the base rect sizing, so the interior
+# usable area (where the wrapped label actually lands) is never smaller than
+# a plain rect would give it — shapes whose border eats into the bounding
+# box (diamond taper, hexagon's corner cut, subroutine's inner bars, the
+# parallelogram's skew) get compensating extra width/height here rather than
+# shrinking the label's room. See ``Canvas``'s ``_draw_*`` methods below for
+# how each shape actually consumes this extra space.
+_CIRCLE_EXTRA_W = 4      # wider than ROUND so it reads as an oval, not a rect.
+_SUBROUTINE_EXTRA_W = 2  # room for the inner ``││`` double-bar sides.
+_HEXAGON_EXTRA_W = 2     # room for the corner-cut cells at each side.
+_PARALLELOGRAM_SKEW = 2  # total horizontal lean across the box's height.
+_DIAMOND_MIN_TAPER = 1
+_DIAMOND_MAX_TAPER = 2
 
-def _box_dims(label: str) -> tuple[int, int]:
+
+def _diamond_taper(content_w: int) -> int:
+    """Rows of corner-taper on each side of a diamond's flat label band —
+    a small fixed range (not scaled to full 45° geometry, which would make
+    short labels absurdly tall) so the point is visible without ballooning
+    box height for the common short decision-label case."""
+    return _DIAMOND_MIN_TAPER if content_w <= 3 else _DIAMOND_MAX_TAPER
+
+
+def _box_dims(label: str, shape: NodeShape = NodeShape.RECT) -> tuple[int, int]:
     """Content-driven box extents (cells), used both to size the grandalf
     ``VertexViewer`` and later to actually draw the box — sizing always goes
     through :func:`visual_len` so wide glyphs are never under-reserved (see
-    the design doc's CJK open risk)."""
+    the design doc's CJK open risk). Shape-aware: several shapes need more
+    room than a plain rect to keep the label clear of their slanted/curved
+    border (see the module-level ``_*_EXTRA_*`` constants)."""
     lines = wrap_text(label or "", _MAX_LABEL_CONTENT_WIDTH) or [""]
     content_w = max((visual_len(line) for line in lines), default=0)
+    content_h = len(lines)
+
+    if shape is NodeShape.DIAMOND:
+        taper = _diamond_taper(content_w)
+        w = max(content_w + 4, _MIN_BOX_W)
+        h = max(content_h + 2 * taper, 2 * taper + 1)
+        return w, h
+    if shape is NodeShape.CIRCLE:
+        w = max(content_w + 4 + _CIRCLE_EXTRA_W, _MIN_BOX_W + _CIRCLE_EXTRA_W)
+        h = max(content_h + 2, _MIN_BOX_H)
+        return w, h
+    if shape is NodeShape.SUBROUTINE:
+        w = max(content_w + 4 + _SUBROUTINE_EXTRA_W, _MIN_BOX_W + _SUBROUTINE_EXTRA_W)
+        h = max(content_h + 2, _MIN_BOX_H)
+        return w, h
+    if shape is NodeShape.HEXAGON:
+        w = max(content_w + 4 + _HEXAGON_EXTRA_W, _MIN_BOX_W + _HEXAGON_EXTRA_W)
+        h = max(content_h + 2, _MIN_BOX_H)
+        return w, h
+    if shape is NodeShape.PARALLELOGRAM:
+        w = max(content_w + 4, _MIN_BOX_W) + _PARALLELOGRAM_SKEW
+        h = max(content_h + 2, _MIN_BOX_H)
+        return w, h
+    # RECT, ROUND, STADIUM, CYLINDER share the plain rect's base sizing —
+    # their border decoration lives entirely in the existing border cells.
     w = max(content_w + 4, _MIN_BOX_W)
-    h = max(len(lines) + 2, _MIN_BOX_H)
+    h = max(content_h + 2, _MIN_BOX_H)
     return w, h
 
 
@@ -430,9 +736,13 @@ def _native_extents(
 
 
 def _place_nodes(
-    nodes: list[FlowNode], edges: list[FlowEdge], direction: Direction
+    nodes: list[FlowNode],
+    edges: list[FlowEdge],
+    direction: Direction,
+    node_subgraph: dict[str, str] | None = None,
 ) -> dict[str, BoxRect]:
-    dims = {n.id: _box_dims(n.label) for n in nodes}
+    node_subgraph = node_subgraph or {}
+    dims = {n.id: _box_dims(n.label, n.shape) for n in nodes}
     native = {
         n.id: _native_extents(direction, *dims[n.id]) for n in nodes
     }
@@ -480,9 +790,30 @@ def _place_nodes(
         min_x = min(v.view.xy[0] for v in comp_vertices)
         provisional = {v: round(v.view.xy[0] - min_x) for v in comp_vertices}
 
+        # Cluster same-subgraph siblings within a rank: group by the outer
+        # subgraph (if any) each node belongs to, order groups by their mean
+        # provisional column (approximating grandalf's crossing-minimized
+        # order), then order nodes within a group by their own provisional
+        # column. This keeps a subgraph's members contiguous within a rank
+        # — which is what makes a clean bounding-rect frame feasible —
+        # without fighting grandalf's ordering across groups. "Reasonably
+        # clustered", not a hard guarantee (see module docstring); a
+        # subgraph frame that still isn't feasible after this flattens
+        # gracefully at the frame-computation step.
         actual_col: dict[Vertex, int] = {}
         for r in sorted(ranks):
-            row_nodes = sorted(ranks[r], key=lambda v: provisional[v])
+            row_nodes = ranks[r]
+            groups: dict[str | None, list[Vertex]] = defaultdict(list)
+            for v in row_nodes:
+                groups[node_subgraph.get(v.data)].append(v)
+            group_avg = {
+                key: sum(provisional[v] for v in vs) / len(vs)
+                for key, vs in groups.items()
+            }
+            row_nodes = sorted(
+                row_nodes,
+                key=lambda v: (group_avg[node_subgraph.get(v.data)], provisional[v]),
+            )
             prev_col: int | None = None
             prev_w = 0
             for v in row_nodes:
@@ -499,6 +830,22 @@ def _place_nodes(
         if min_col < 0:
             for v in actual_col:
                 actual_col[v] -= min_col
+
+        # ``actual_col`` is a *center* coordinate per node, not a left edge —
+        # shifting so the smallest center is 0 (above) does not guarantee
+        # the smallest node's own left edge (``col - native_w // 2``) is
+        # non-negative. Re-shift so the component's true leftmost edge sits
+        # at 0, so ``comp_width`` below (and thus the next component's
+        # offset) reflects the component's real full extent rather than
+        # under-counting by half of its leftmost node's width — otherwise
+        # consecutive components end up flush against each other with the
+        # component gutter silently eaten.
+        left_edge_min = min(
+            actual_col[v] - native[v.data][0] // 2 for v in comp_vertices
+        )
+        if left_edge_min < 0:
+            for v in actual_col:
+                actual_col[v] -= left_edge_min
 
         comp_width = max(
             actual_col[v] + native[v.data][0] // 2 for v in comp_vertices
@@ -544,6 +891,138 @@ def _place_nodes(
             rects[node_id] = BoxRect(x=r.x + shift_x, y=r.y + shift_y, w=r.w, h=r.h)
 
     return rects
+
+
+def _node_subgraph_map(subgraphs: list[Subgraph]) -> dict[str, str]:
+    """node id -> the id of the outer-most (top-level) subgraph transitively
+    containing it. Used by :func:`_place_nodes` to cluster a subgraph's
+    members within a rank — nested children share their top-level
+    ancestor's key here, since clustering only needs to keep a whole
+    subtree's nodes together, not distinguish nesting level."""
+    mapping: dict[str, str] = {}
+
+    def visit(sg: Subgraph, top_id: str) -> None:
+        for nid in sg.node_ids:
+            mapping.setdefault(nid, top_id)
+        for child in sg.children:
+            visit(child, top_id)
+
+    for sg in subgraphs:
+        visit(sg, sg.id)
+    return mapping
+
+
+_FRAME_PAD_X = 1     # columns of padding each side, between members and the frame border.
+_FRAME_PAD_TOP = 1   # blank interior rows between the title border and the members.
+_FRAME_PAD_BOTTOM = 1  # blank interior rows between the members and the bottom border.
+
+
+def _member_ids(sg: Subgraph) -> set[str]:
+    ids = set(sg.node_ids)
+    for child in sg.children:
+        ids |= _member_ids(child)
+    return ids
+
+
+def _rects_overlap(a: BoxRect, b: BoxRect) -> bool:
+    return not (
+        a.x + a.w <= b.x or b.x + b.w <= a.x or a.y + a.h <= b.y or b.y + b.h <= a.y
+    )
+
+
+def _build_subgraph_frames(
+    sg: Subgraph, rects: dict[str, BoxRect]
+) -> tuple[list[tuple[BoxRect, str]], BoxRect | None]:
+    """Recursively compute one subgraph's frame(s) bottom-up, returning
+    ``(frames_in_this_subtree, bound_for_parent)``.
+
+    ``bound_for_parent`` is what the *enclosing* subgraph's own extent
+    computation should treat this subtree as occupying: if ``sg`` itself
+    gets a frame, that is its full padded ``frame_rect`` (border included)
+    — never just the raw member extent — so a parent subgraph's own
+    padding is guaranteed to land outside this child's frame border rather
+    than colliding with it (the bug this replaces: two nested subgraphs
+    whose members share the same column/row span used to produce
+    identically-sized frame rects, so the inner frame's border landed
+    exactly on the outer's, overwriting it). If ``sg`` flattens (or has no
+    placed members at all), the bound is its raw member/child extent (or
+    ``None``) instead, matching the old behavior for that case.
+
+    ``None`` when nothing inside resolves to a placed node (an empty or
+    entirely-dangling subgraph): the caller flattens in that case.
+    """
+    child_results = [_build_subgraph_frames(child, rects) for child in sg.children]
+    child_frames: list[tuple[BoxRect, str]] = []
+    for cframes, _ in child_results:
+        child_frames.extend(cframes)
+
+    boxes: list[BoxRect] = [rects[nid] for nid in sg.node_ids if nid in rects]
+    boxes.extend(bound for _, bound in child_results if bound is not None)
+    if not boxes:
+        return child_frames, None
+
+    x0 = min(b.x for b in boxes)
+    y0 = min(b.y for b in boxes)
+    x1 = max(b.x + b.w for b in boxes)
+    y1 = max(b.y + b.h for b in boxes)
+    extent = BoxRect(x=x0, y=y0, w=x1 - x0, h=y1 - y0)
+
+    # +2 on width/height accounts for the frame's own border cells (draw_frame
+    # draws them at the rect's edges); the pad constants are blank interior
+    # rows/columns between those borders and the members themselves.
+    frame_rect = BoxRect(
+        x=extent.x - _FRAME_PAD_X - 1,
+        y=extent.y - _FRAME_PAD_TOP - 1,
+        w=extent.w + 2 * _FRAME_PAD_X + 2,
+        h=extent.h + _FRAME_PAD_TOP + _FRAME_PAD_BOTTOM + 2,
+    )
+    # draw_frame left-anchors and truncates its title to whatever width it's
+    # given (it does not widen itself) — widen here so a title longer than
+    # the members' own bounding box still shows in full, extending rightward
+    # only (title stays left-anchored).
+    title_min_w = visual_len(f"\u2500 {sg.title} ") + 2 if sg.title else 4
+    if title_min_w > frame_rect.w:
+        frame_rect = BoxRect(
+            x=frame_rect.x, y=frame_rect.y, w=title_min_w, h=frame_rect.h
+        )
+
+    member_ids = _member_ids(sg)
+    foreign_overlap = any(
+        node_id not in member_ids and _rects_overlap(frame_rect, r)
+        for node_id, r in rects.items()
+    )
+    if foreign_overlap:
+        # Flatten: no frame for sg itself, but its raw (unpadded) extent
+        # still bounds whatever parent subgraph encloses it, and its
+        # children's own frames (if any) are unaffected.
+        return child_frames, extent
+    return [(frame_rect, sg.title)] + child_frames, frame_rect
+
+
+def _collect_frames(
+    subgraphs: list[Subgraph], rects: dict[str, BoxRect]
+) -> list[tuple[BoxRect, str]]:
+    """Frame rects (padded, with room for the title border) for every
+    subgraph feasible to enclose — outer subgraphs before their nested
+    children, matching draw order (frames are drawn outer-to-inner, then
+    node boxes on top of all of them; see ``layout_flowgraph``).
+
+    A subgraph is skipped (flattened — its members still render as plain
+    boxes, just with no enclosing frame) when its members aren't placed
+    contiguously enough for a clean rect: if the padded bounding box would
+    overlap any OTHER node's box (one not transitively a member of this
+    subgraph), drawing the frame would visually claim a node that isn't
+    inside it, which is worse than no frame. Each subgraph's feasibility is
+    judged independently — a flattened parent doesn't suppress its
+    children's own frames. Nesting is bottom-up (see
+    :func:`_build_subgraph_frames`) so a parent's own frame always encloses
+    its children's frames with real margin, never coinciding with one.
+    """
+    frames: list[tuple[BoxRect, str]] = []
+    for sg in subgraphs:
+        sg_frames, _ = _build_subgraph_frames(sg, rects)
+        frames.extend(sg_frames)
+    return frames
 
 
 # --------------------------------------------------------------------------
@@ -933,12 +1412,41 @@ def layout_flowgraph(g: FlowGraph, width: int) -> list[str]:
     if not g.nodes:
         return []
     try:
-        rects = _place_nodes(g.nodes, g.edges, g.direction)
+        node_subgraph = _node_subgraph_map(g.subgraphs)
+        rects = _place_nodes(g.nodes, g.edges, g.direction, node_subgraph)
         if not rects:
             return []
-        max_x = max(r.x + r.w for r in rects.values())
-        max_y = max(r.y + r.h for r in rects.values())
+
+        frames = _collect_frames(g.subgraphs, rects)
+
+        # A frame's padding can push its top-left corner negative even
+        # though every node rect is already non-negative (_place_nodes'
+        # own normalization only accounts for node boxes) — shift
+        # everything together so the canvas never has to address a
+        # negative coordinate (which Canvas silently drops).
+        min_x = min([r.x for r in rects.values()] + [fr.x for fr, _ in frames])
+        min_y = min([r.y for r in rects.values()] + [fr.y for fr, _ in frames])
+        shift_x = -min_x if min_x < 0 else 0
+        shift_y = -min_y if min_y < 0 else 0
+        if shift_x or shift_y:
+            rects = {
+                node_id: BoxRect(x=r.x + shift_x, y=r.y + shift_y, w=r.w, h=r.h)
+                for node_id, r in rects.items()
+            }
+            frames = [
+                (BoxRect(x=fr.x + shift_x, y=fr.y + shift_y, w=fr.w, h=fr.h), title)
+                for fr, title in frames
+            ]
+
+        max_x = max([r.x + r.w for r in rects.values()] + [fr.x + fr.w for fr, _ in frames])
+        max_y = max([r.y + r.h for r in rects.values()] + [fr.y + fr.h for fr, _ in frames])
         canvas = Canvas(max_x, max_y)
+
+        # Frames first (behind), then boxes, then edges — a subgraph
+        # enclosure never reserves cells, so nodes/edges draw over it
+        # freely; node boxes reserve their cells so the router avoids them.
+        for frame_rect, title in frames:
+            canvas.draw_frame(frame_rect, title)
         for n in g.nodes:
             rect = rects.get(n.id)
             if rect is not None:
