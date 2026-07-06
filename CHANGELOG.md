@@ -1,6 +1,29 @@
 # CHANGELOG
 
 
+## v4.1.0 (2026-07-06)
+
+### Features
+
+- **renderers**: Dispatch mermaid by type; native pie and gantt renderers
+  ([`08decd1`](https://github.com/crouton-labs/termrender/commit/08decd191c7b17680a8785037b87807d18959de5))
+
+mermaid.py becomes a first-line type dispatcher: pie and gantt now get dedicated native Python
+  renderers instead of falling through to the vendored Go mermaid-ascii binary (which just echoed
+  them as plaintext). Every other type's degradation is unchanged byte-for-byte, including
+  flowchart/graph routing to the Go binary.
+
+- mermaid_pie.py: parses the pie grammar and renders a labeled horizontal bar chart with
+  percentages, reusing charts.py's render_bar. - mermaid_gantt.py: parses the core gantt grammar
+  (dateFormat, sections, tasks with dates/durations/after-deps) and renders section-grouped rows
+  with time-span bars scaled to the overall date range. Malformed lines and unresolvable tasks
+  degrade gracefully instead of crashing. - layout.py's height pass now shares the same
+  render_mermaid_lines dispatch mermaid.py uses, removing a duplicated subprocess call.
+
+Tests: parser/layout coverage for both new renderers plus dispatcher routing tests
+  (test_mermaid_pie.py, test_mermaid_gantt.py, test_mermaid_dispatch.py).
+
+
 ## v4.0.0 (2026-07-06)
 
 ### Features
