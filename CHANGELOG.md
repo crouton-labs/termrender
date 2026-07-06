@@ -1,6 +1,61 @@
 # CHANGELOG
 
 
+## v4.3.1 (2026-07-06)
+
+### Bug Fixes
+
+- **mermaid-gantt**: Close remaining overflow and includes gaps from review
+  ([`73a1354`](https://github.com/crouton-labs/termrender/commit/73a135465644073d58e293ed69e6ca968d4f5a05))
+
+- _skip_excluded() and the implicit +1-day default end could still raise OverflowError past
+  datetime.max; both call sites now catch it and degrade the whole diagram to source instead of
+  crashing. - includes weekends was accepted but silently no-op'd (excludes weekends + includes
+  weekends still rendered the excluded schedule); includes now only supports explicit YYYY-MM-DD
+  dates and rejects weekends as _Unsupported rather than pretending to cancel the exclusion.
+
+fix(mermaid-pie): reject invalid trailing header grammar
+
+pie bogus (anything after pie/pie showData that isn't a valid inline title) was silently accepted
+  and rendered a plausible chart; it now degrades the whole diagram to source, matching the
+  strictness already applied to other invalid pie lines.
+
+- **mermaid-gantt**: Implement excludes/includes, milestone, until; never-crash on bad
+  dateFormat/overflow
+  ([`e182ae1`](https://github.com/crouton-labs/termrender/commit/e182ae1346af7fa4a531ad0014878e06caf5304e))
+
+Several valid Mermaid gantt constructs rendered false schedules, and malformed input could crash:
+
+- A malformed dateFormat (e.g. YYYY-YYYY, whose translated strptime pattern has a duplicate capture
+  group) raised re.error instead of being caught; the format is now validated by round-tripping a
+  sample date and an invalid format degrades the whole diagram to source. - Huge numeric durations
+  (e.g. 1000000000d) overflowed timedelta/datetime arithmetic; overflow is now caught and degrades
+  the whole diagram. - excludes weekends / excludes <YYYY-MM-DD> and includes <YYYY-MM-DD> are now
+  applied when resolving durations and auto-anchored start dates, instead of being ignored as
+  decorative metadata. An excludes/includes form we don't implement (e.g. day names) degrades the
+  whole diagram rather than rendering a false schedule. - milestone tasks are now tracked as
+  point-in-time markers (rendered as a single diamond marker) instead of ordinary duration spans. -
+  until <taskId> is now resolved to the referenced task's start date; an unknown reference degrades
+  the whole diagram. - %% comments (whole-line and trailing inline) are stripped before
+  tokenization, so a comment containing a colon can no longer be misparsed as a task.
+
+- **mermaid-pie**: Degrade to source on invalid grammar, negative or overflowing values
+  ([`765f613`](https://github.com/crouton-labs/termrender/commit/765f613d9e1b72ff79e8f0c32ac8d9f9cdceef69))
+
+Native pie parsing previously treated any non-matching line as a silent ignorable and accepted
+  negative slice values, so malformed input rendered a plausible-but-wrong partial chart instead of
+  falling back to source. Arbitrarily long numeric literals could also reach charts._format_value()
+  as float('inf') and raise OverflowError.
+
+- Invalid grammar (anything beyond header/title/accTitle/accDescr/%% comments/slice lines) now
+  discards the whole diagram and falls back to raw source, matching Mermaid's actual pie grammar. -
+  Negative slice values are rejected the same way (Mermaid disallows them). - Non-finite values
+  (from huge numeric literals) are rejected in parse_pie, and the summed total is re-checked in
+  render() as a second guard, both falling back to source instead of crashing. - Slice labels now
+  also accept single-quoted strings and escaped quotes inside double-quoted strings, per Mermaid's
+  real string grammar.
+
+
 ## v4.3.0 (2026-07-06)
 
 ### Features
