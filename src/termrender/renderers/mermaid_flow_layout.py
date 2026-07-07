@@ -1488,75 +1488,134 @@ def _classify_edge(
     return "forward" if forward else "back"
 
 
-def _allocate_edge_anchors(
+def _spread_group_anchors(
     rects: dict[str, BoxRect],
     direction: Direction,
     edges: list[FlowEdge],
-    nodes: list[FlowNode] | None = None,
+    node_by_id: dict[str, "FlowNode"],
+    groups: dict[tuple[str, str], list[int]],
+    is_marked,
+    other_end,
 ) -> dict[int, tuple[int, int]]:
-    """Pre-pass over every edge: group forward/back edges by the exit side
-    they share with sibling edges leaving the *same* node (``(src, exit
-    side)`` for forward edges, ``(src, lane side)`` for back-edges), and
-    spread a group's anchor points along that side's usable span (see
-    :func:`_side_interior_span`) — but **only** when 2+ of that group's
-    edges carry a source-side arrow marker (``src_arrow`` or a non-default
-    ``src_arrow_kind`` — the UML composition/aggregation case documented
-    in ``mermaid_class.py``). Left stacked on one shared anchor otherwise
-    (the overwhelming majority of groups): a plain, markerless multi-edge
-    fan-out (``A-->B; A-->C``) *relies* on sharing one exit cell for its
-    trunk-then-tee look (draw_segment's junction bitmask resolves the
-    shared point into a single ┬/┴, not two disjoint stubs) — spreading it
-    would only change this module's own aesthetic choice of where the fan
-    visually splits, not fix anything, and would break that look for every
-    existing fan-out/merge golden. A marker glyph, unlike a plain line
-    junction, has no such union — two different marker glyphs landing on
-    one cell just silently lose all but the last-drawn one, which is the
-    actual defect this closes. (The sibling label-collision defect — two
-    edges from a shared exit tying for "longest straight run" so a second
-    label lands on cells the first already claimed — is fixed separately,
-    in :func:`_longest_segment`'s tie-break, since it needs no anchor
-    change at all.) Returns a dict keyed by index into ``edges``; an edge
-    absent from it keeps the engine's single fixed exit anchor
-    (:func:`_forward_exit`/:func:`_lane_anchor`) unchanged. Same-rank
-    edges and self-loops are never grouped here — same-rank anchors are
-    already per-pair (:func:`_facing_anchor`, dynamic per destination, not
-    a fixed shared side), and self-loops already stack via their own
-    ``self_loop_counter``-driven reach.
+    """Shared spreading logic behind :func:`_allocate_edge_anchors`'s two
+    passes (source exits, destination entries): for each ``(node_id,
+    side)`` group of 2+ edges that share a border side at ``node_id``,
+    spread their anchor points along that side's usable span (see
+    :func:`_side_interior_span`) — but only when 2+ of the group's edges
+    are ``is_marked`` (carry an arrow marker on the end at ``node_id``).
+    ``other_end(edge)`` gives the node id at the *other* end of an edge,
+    used only to order the spread left-to-right/top-to-bottom by where
+    each edge's far endpoint sits off-axis, so the spread reads in the
+    same visual order the paths already fan out in. Returns a dict keyed
+    by index into ``edges``; groups left ungrouped (size < 2) or
+    under-marked (< 2 marked) are entirely absent from it.
     """
-    node_by_id = {n.id: n for n in (nodes or [])}
-    groups: dict[tuple[str, str], list[int]] = defaultdict(list)
-    for i, e in enumerate(edges):
-        if e.src == e.dst:
-            continue
-        kind = _classify_edge(rects, direction, e)
-        if kind == "forward":
-            groups[(e.src, _forward_exit_side(direction))].append(i)
-        elif kind == "back":
-            groups[(e.src, _lane_side(direction))].append(i)
-        # "same-rank" / None (dangling): no override, unchanged behavior.
-
     overrides: dict[int, tuple[int, int]] = {}
     for (node_id, side), idxs in groups.items():
         if len(idxs) < 2:
             continue
-        marked = [
-            i
-            for i in idxs
-            if edges[i].src_arrow or edges[i].src_arrow_kind != "default"
-        ]
+        marked = [i for i in idxs if is_marked(edges[i])]
         if len(marked) < 2:
             continue
         rect = rects.get(node_id)
         if rect is None:
             continue
         ordered = sorted(
-            idxs, key=lambda i: _abstract(direction, rects[edges[i].dst].center)[1]
+            idxs, key=lambda i: _abstract(direction, rects[other_end(edges[i])].center)[1]
         )
         lo, hi = _side_span_for_node(node_by_id.get(node_id), rect, side)
         spread = _spread_points(lo, hi, len(ordered))
         for idx, along in zip(ordered, spread):
             overrides[idx] = _side_point(rect, side, along)
     return overrides
+
+
+def _allocate_edge_anchors(
+    rects: dict[str, BoxRect],
+    direction: Direction,
+    edges: list[FlowEdge],
+    nodes: list[FlowNode] | None = None,
+) -> tuple[dict[int, tuple[int, int]], dict[int, tuple[int, int]]]:
+    """Pre-pass over every edge: group forward/back edges by the border
+    side they share with sibling edges at the *same* node, on **both**
+    ends independently — exit side at the source (``(src, exit side)`` for
+    forward edges, ``(src, lane side)`` for back-edges) and entry side at
+    the destination (``(dst, entry side)`` for forward edges, ``(dst, lane
+    side)`` for back-edges, since a back-edge's destination anchor is also
+    :func:`_lane_anchor`, the same physical side as its source anchor).
+    Within each group, spread the anchor points along that side's usable
+    span (see :func:`_side_interior_span`) — but **only** when 2+ of the
+    group's edges carry an arrow marker on the end at that shared node.
+    The two ends use different tests, deliberately not symmetric in *how*
+    they detect a marker even though the spreading they trigger is: an
+    exit group tests ``src_arrow or src_arrow_kind != "default"`` (a
+    source-side arrowhead of any kind is already rare — most edges have
+    none — so its mere presence is already a meaningful signal), while an
+    entry group tests only ``dst_arrow_kind != "default"`` (a
+    destination-side arrowhead is the *default* for an ordinary ``-->``
+    edge — ``dst_arrow`` is ``True`` almost everywhere — so testing its
+    bare presence would spread every ordinary fan-in; only a non-default
+    *kind*, the UML composition/aggregation diamond case documented in
+    ``mermaid_class.py``, is the actual collision this closes). Left
+    stacked on one shared anchor otherwise (the overwhelming majority of
+    groups): a plain, markerless
+    multi-edge fan-out (``A-->B; A-->C``) or fan-in (``A-->C; B-->C``)
+    *relies* on sharing one exit/entry cell for its trunk-then-tee look
+    (draw_segment's junction bitmask resolves the shared point into a
+    single ┬/┴, not two disjoint stubs) — spreading it would only change
+    this module's own aesthetic choice of where the fan visually splits,
+    not fix anything, and would break that look for every existing fan-
+    out/merge golden. A marker glyph, unlike a plain line junction, has no
+    such union — two different marker glyphs landing on one cell just
+    silently lose all but the last-drawn one, which is the actual defect
+    this closes, on whichever end (source or destination) carries the
+    colliding markers. (The sibling label-collision defect — two edges
+    from a shared exit tying for "longest straight run" so a second label
+    lands on cells the first already claimed — is fixed separately, in
+    :func:`_longest_segment`'s tie-break, since it needs no anchor change
+    at all.) Returns a ``(exit_overrides, entry_overrides)`` pair, each a
+    dict keyed by index into ``edges``; an edge absent from one keeps the
+    engine's single fixed anchor on that end (:func:`_forward_exit`/
+    :func:`_forward_entry`/:func:`_lane_anchor`) unchanged. Same-rank
+    edges and self-loops are never grouped here — same-rank anchors are
+    already per-pair (:func:`_facing_anchor`, dynamic per destination, not
+    a fixed shared side), and self-loops already stack via their own
+    ``self_loop_counter``-driven reach.
+    """
+    node_by_id = {n.id: n for n in (nodes or [])}
+    exit_groups: dict[tuple[str, str], list[int]] = defaultdict(list)
+    entry_groups: dict[tuple[str, str], list[int]] = defaultdict(list)
+    for i, e in enumerate(edges):
+        if e.src == e.dst:
+            continue
+        kind = _classify_edge(rects, direction, e)
+        if kind == "forward":
+            exit_groups[(e.src, _forward_exit_side(direction))].append(i)
+            entry_groups[(e.dst, _forward_entry_side(direction))].append(i)
+        elif kind == "back":
+            exit_groups[(e.src, _lane_side(direction))].append(i)
+            entry_groups[(e.dst, _lane_side(direction))].append(i)
+        # "same-rank" / None (dangling): no override, unchanged behavior.
+
+    exit_overrides = _spread_group_anchors(
+        rects,
+        direction,
+        edges,
+        node_by_id,
+        exit_groups,
+        lambda e: e.src_arrow or e.src_arrow_kind != "default",
+        lambda e: e.dst,
+    )
+    entry_overrides = _spread_group_anchors(
+        rects,
+        direction,
+        edges,
+        node_by_id,
+        entry_groups,
+        lambda e: e.dst_arrow_kind != "default",
+        lambda e: e.src,
+    )
+    return exit_overrides, entry_overrides
 
 
 def _abstract(direction: Direction, point: tuple[int, int]) -> tuple[int, int]:
@@ -1681,6 +1740,53 @@ def _reserve_label_margin(canvas: Canvas, x: int, y: int) -> None:
     canvas.set_char(x, y, canvas.get_char(x, y), reserve=True)
 
 
+def _label_cell_widths(label: str) -> list[int]:
+    """Per-character visual width of ``label``, as successive
+    :func:`~termrender.style.visual_len` prefix deltas — a wide
+    CJK/fullwidth character reports ``2`` here without this module
+    needing to duplicate ``visual_len``'s own east-asian-width table (the
+    deltas telescope to ``visual_len(label)`` by construction, so this
+    always agrees with the total cell count :func:`_draw_label_on_segment`
+    already reserves for the label)."""
+    widths = []
+    prev = 0
+    for i in range(1, len(label) + 1):
+        cur = visual_len(label[: i])
+        widths.append(cur - prev)
+        prev = cur
+    return widths
+
+
+def _write_label_run(
+    canvas: Canvas, start: int, row: int, label: str, check_reserved: bool
+) -> None:
+    """Write ``label`` into row ``row`` starting at column ``start``,
+    advancing the write cursor by each character's own visual width (see
+    :func:`_label_cell_widths`) instead of one grid cell per Python code
+    point. A single-width character still occupies just its one cell; a
+    wide CJK/fullwidth character's glyph lands in its first cell only,
+    and the *next* cell it visually covers is marked reserved and left
+    blank — without this, that second cell stays unreserved and a
+    connector glyph drawn earlier (edges draw before labels, see
+    :func:`layout_flowgraph`) remains visible inside the label's own
+    visual width. ``check_reserved`` mirrors the two call sites' existing
+    behavior: the "clear run found" placement writes unconditionally (the
+    whole run was already verified clear by the caller), the
+    overflow-tolerated fallback placement instead skips any individual
+    cell that's already reserved, one cell at a time (never overwriting a
+    box).
+    """
+    x = start
+    for ch, w in zip(label, _label_cell_widths(label)):
+        if not check_reserved or not canvas.is_reserved(x, row):
+            canvas.set_char(x, row, ch, reserve=True)
+        for extra in range(1, w):
+            cx = x + extra
+            if not check_reserved or not canvas.is_reserved(cx, row):
+                canvas.set_char(cx, row, "", reserve=True)
+        x += w
+
+
 def _draw_label_on_segment(
     canvas: Canvas, a: tuple[int, int], b: tuple[int, int], label: str
 ) -> None:
@@ -1717,15 +1823,12 @@ def _draw_label_on_segment(
         for start in _label_positions(length, center, lo, hi):
             run = cells(start)
             if not any(canvas.is_reserved(x, y) for x, y in run):
-                for (px, py), ch in zip(run, label):
-                    canvas.set_char(px, py, ch, reserve=True)
+                _write_label_run(canvas, start, row, label, check_reserved=False)
                 _reserve_label_margin(canvas, start - 1, row)
                 _reserve_label_margin(canvas, start + length, row)
                 return
         start = max(lo, min(center - length // 2, hi - length + 1))
-        for (px, py), ch in zip(cells(start), label):
-            if not canvas.is_reserved(px, py):
-                canvas.set_char(px, py, ch, reserve=True)
+        _write_label_run(canvas, start, row, label, check_reserved=True)
         return
 
     # Vertical segment: the label still reads horizontally, centered on
@@ -1745,14 +1848,11 @@ def _draw_label_on_segment(
     for row in _label_positions(1, center_row, lo, hi):
         run = row_cells(row)
         if not any(canvas.is_reserved(x, y) for x, y in run):
-            for (px, py), ch in zip(run, label):
-                canvas.set_char(px, py, ch, reserve=True)
+            _write_label_run(canvas, start_x, row, label, check_reserved=False)
             _reserve_label_margin(canvas, start_x - 1, row)
             _reserve_label_margin(canvas, start_x + length, row)
             return
-    for (px, py), ch in zip(row_cells(center_row), label):
-        if not canvas.is_reserved(px, py):
-            canvas.set_char(px, py, ch, reserve=True)
+    _write_label_run(canvas, start_x, center_row, label, check_reserved=True)
 
 
 def _draw_polyline(canvas: Canvas, points: list[tuple[int, int]], style: EdgeStyle) -> None:
@@ -1809,6 +1909,7 @@ def _route_edge_path(
     lane_counter: list[int],
     self_loop_counter: dict[str, int],
     exit_anchor: tuple[int, int] | None = None,
+    entry_anchor: tuple[int, int] | None = None,
 ) -> list[tuple[int, int]] | None:
     """Compute one edge's polyline points: anchors chosen by relative rank
     position, an L/Z/C path shape. Pure path computation only — drawing is
@@ -1818,13 +1919,14 @@ def _route_edge_path(
     return ``None`` (defensive no-op — the parser guarantees valid
     endpoints; this module never crashes on one).
 
-    ``exit_anchor``, when given (from :func:`_allocate_edge_anchors`),
-    replaces the src border point that would otherwise come from
-    :func:`_forward_exit`/:func:`_lane_anchor` — used only when this
-    edge's exit side is shared with a sibling edge that also carries a
-    source-side arrow marker; ``None`` (the overwhelming common case)
-    reproduces the original single-anchor behavior exactly. Same-rank
-    edges and self-loops ignore it (see :func:`_allocate_edge_anchors`'s
+    ``exit_anchor``/``entry_anchor``, when given (from
+    :func:`_allocate_edge_anchors`), replace the src/dst border point that
+    would otherwise come from :func:`_forward_exit`/:func:`_forward_entry`/
+    :func:`_lane_anchor` — used only when this edge's exit/entry side is
+    shared with a sibling edge that also carries an arrow marker on that
+    same end; ``None`` (the overwhelming common case, for either) reproduces
+    the original single-anchor behavior exactly on that end. Same-rank
+    edges and self-loops ignore both (see :func:`_allocate_edge_anchors`'s
     docstring for why).
     """
     src_rect = rects.get(edge.src)
@@ -1844,7 +1946,8 @@ def _route_edge_path(
 
     if kind == "forward":
         exit_pt = exit_anchor if exit_anchor is not None else _forward_exit(direction, src_rect)
-        return _z_path(direction, exit_pt, _forward_entry(direction, dst_rect))
+        entry_pt = entry_anchor if entry_anchor is not None else _forward_entry(direction, dst_rect)
+        return _z_path(direction, exit_pt, entry_pt)
 
     lane = lane_counter[0]
     lane_counter[0] += 1
@@ -1854,9 +1957,8 @@ def _route_edge_path(
         + lane * _LANE_GAP
     )
     exit_pt = exit_anchor if exit_anchor is not None else _lane_anchor(direction, src_rect)
-    return _lane_path(
-        direction, exit_pt, _lane_anchor(direction, dst_rect), lane_secondary
-    )
+    entry_pt = entry_anchor if entry_anchor is not None else _lane_anchor(direction, dst_rect)
+    return _lane_path(direction, exit_pt, entry_pt, lane_secondary)
 
 
 # --------------------------------------------------------------------------
@@ -1933,7 +2035,9 @@ def layout_flowgraph(g: FlowGraph, width: int) -> list[str]:
         # a cell — labels are only ever safe once no more lines are coming.
         lane_counter = [0]
         self_loop_counter: dict[str, int] = {}
-        exit_overrides = _allocate_edge_anchors(rects, g.direction, g.edges, g.nodes)
+        exit_overrides, entry_overrides = _allocate_edge_anchors(
+            rects, g.direction, g.edges, g.nodes
+        )
         edge_paths: list[tuple[FlowEdge, list[tuple[int, int]]]] = []
         for i, e in enumerate(g.edges):
             points = _route_edge_path(
@@ -1943,6 +2047,7 @@ def layout_flowgraph(g: FlowGraph, width: int) -> list[str]:
                 lane_counter,
                 self_loop_counter,
                 exit_overrides.get(i),
+                entry_overrides.get(i),
             )
             if points is not None:
                 edge_paths.append((e, points))

@@ -474,3 +474,66 @@ def test_duplicate_edges_and_empty_labels_render_without_raising():
     assert lines, "a well-typed non-empty graph must still render"
     text = "\n".join(lines)
     assert text.count("\u250c") == 2, "expected exactly the two declared node boxes"
+
+
+# --------------------------------------------------------------------------
+# Destination-side marker anchors (regression: _allocate_edge_anchors used to
+# spread shared *source* exits only, so 2+ edges entering one node with
+# different destination-end markers all landed on the single fixed
+# _forward_entry anchor and silently lost all but the last-drawn glyph)
+# --------------------------------------------------------------------------
+
+
+def test_two_destination_side_markers_into_one_node_both_survive():
+    g = FlowGraph(
+        direction=Direction.TB,
+        nodes=[_node("A"), _node("B"), _node("C")],
+        edges=[
+            _edge("A", "C", dst_arrow_kind="diamond_filled"),
+            _edge("B", "C", dst_arrow_kind="diamond_hollow"),
+        ],
+    )
+    lines = layout_flowgraph(g, width=80)
+    text = "\n".join(lines)
+    assert "\u25c6" in text, "diamond_filled destination marker must survive"
+    assert "\u25c7" in text, "diamond_hollow destination marker must survive"
+
+
+def test_plain_arrow_fan_in_still_shares_one_entry_anchor():
+    # Guards the deliberate scoping this fix must not break: an ordinary
+    # fan-in (no non-default dst_arrow_kind — an everyday "-->" edge
+    # already sets dst_arrow=True, so the trigger must be the *kind*, not
+    # bare arrow presence) still lands on one shared entry cell so
+    # draw_segment's junction bitmask resolves it into a single ┬/┴ trunk
+    # rather than two disjoint stubs either side of the node.
+    g = FlowGraph(
+        direction=Direction.TB,
+        nodes=[_node("A"), _node("B"), _node("C")],
+        edges=[_edge("A", "C"), _edge("B", "C")],
+    )
+    lines = layout_flowgraph(g, width=80)
+    text = "\n".join(lines)
+    assert "\u252c" in text or "\u2534" in text, "plain fan-in should keep its shared trunk look"
+
+
+# --------------------------------------------------------------------------
+# CJK edge labels (regression: label placement measured visual_len(label)
+# for reservation/search but wrote/reserved one grid cell per Python code
+# point, so a wide CJK label under-reserved and a connector glyph already
+# drawn on the segment stayed visible inside the label's own visual width)
+# --------------------------------------------------------------------------
+
+
+def test_cjk_edge_label_has_no_connector_bleed_inside_its_width():
+    g = FlowGraph(
+        direction=Direction.TB,
+        nodes=[_node("A"), _node("B")],
+        edges=[_edge("A", "B", label="\u4f60\u597d")],  # "你好"
+    )
+    lines = layout_flowgraph(g, width=80)
+    label_row = next(line for line in lines if "\u4f60\u597d" in line)
+    assert not _BOX_GLYPH_RE.search(label_row), (
+        "a connector/box glyph landed inside the CJK label's own visual width: "
+        f"{label_row!r}"
+    )
+    assert label_row.strip() == "\u4f60\u597d"
