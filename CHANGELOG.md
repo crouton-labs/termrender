@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v4.10.1 (2026-07-07)
+
+### Bug Fixes
+
+- **mermaid-flow**: Constant inter-layer gap regardless of node height
+  ([`eb1726f`](https://github.com/crouton-labs/termrender/commit/eb1726fa4bd05a57d29026b10715edc067ac4113))
+
+The rank-band gap override that widens spacing to fit a labeled edge scaled with visual_len(label)
+  (the label's *text width*) even on TB/BT diagrams, where the label is drawn horizontally across a
+  vertical connector and only ever needs one clear row, not one row per character. Since ER/class
+  diagrams route almost every edge through a label (relationship text, cardinality), this made
+  compartmented-node TB layouts burn ~15-17 blank connector rows per edge hop while 1-line-node
+  flowcharts stayed compact — node height was a red herring; the real driver was label width feeding
+  a row count.
+
+_rank_gap_overrides is now direction-aware: LR/RL keeps the width-scaled gap (the transpose turns
+  that native row-band into the final horizontal run the label reads along, so it genuinely needs
+  the width). TB/BT gets a small constant, _LABELED_ROW_GAP=3, regardless of label length.
+
+Updates the two TB labeled-edge goldens in test_mermaid_flow_corpus.py to the new compact spacing,
+  and adds a regression test in test_mermaid_er.py pinning a row budget for compartmented entities
+  so this doesn't regress.
+
+
 ## v4.10.0 (2026-07-07)
 
 ### Features
