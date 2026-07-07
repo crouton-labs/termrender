@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.6.3 (2026-07-07)
+
+### Bug Fixes
+
+- Commit uv.lock resolution for grandalf runtime dependency
+  ([`0b2a39e`](https://github.com/crouton-labs/termrender/commit/0b2a39ee4440a907c309328920062e543fd5e47e))
+
+
 ## v4.6.2 (2026-07-07)
 
 ### Bug Fixes
