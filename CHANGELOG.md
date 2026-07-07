@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.10.2 (2026-07-07)
+
+### Bug Fixes
+
+- **mermaid-flow**: Split entry anchors and cjk labels
+  ([`0d5160d`](https://github.com/crouton-labs/termrender/commit/0d5160d18f719f3045e552236e38b640ab967b13))
+
+
 ## v4.10.1 (2026-07-07)
 
 ### Bug Fixes
