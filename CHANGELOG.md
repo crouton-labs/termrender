@@ -1,6 +1,28 @@
 # CHANGELOG
 
 
+## v4.6.2 (2026-07-07)
+
+### Bug Fixes
+
+- **mermaid-flow**: Preserve edge labels, render self-loops, sanitize degraded echo
+  ([`263100f`](https://github.com/crouton-labs/termrender/commit/263100f16e1a7f0044497f2dedd0fd10f0831626))
+
+- Router now draws all edge polylines+arrowheads first, then all edge labels last (reserving each
+  label's cells, plus a margin), so a later edge's line can never silently erase an earlier edge's
+  label and two labels sharing a lane render with visible separation instead of concatenating. -
+  Rank-band gaps widen to fit an adjacent-rank edge's label in full (_rank_gap_overrides), fixing
+  short LR/forward-adjacent labeled edges (e.g. "hello") that were previously clipped to a couple of
+  characters. - Raw-echo degradation now strips any box-drawing/geometric glyph (\u2500-\u259f,
+  \u25a0-\u25ff) present in the malformed source itself, so a degraded echo can never be misdetected
+  as a successful render. - Hardened green-theatre tests: self-loop tests now assert real loop
+  geometry (arrowhead + glyphs past the box border) instead of "non-empty output"; the
+  edge-visibility test now inspects the guaranteed-clear inter-box gap instead of accepting
+  box-border glyphs; cycle/labeled-back-edge/direction/never-raises tests gained genuine
+  topology/degradation assertions in place of crash-only checks. - Updated the two corpus goldens
+  (pipe-label, inline-label) whose rendered height changed under the new label-aware gap widening.
+
+
 ## v4.6.1 (2026-07-07)
 
 ### Bug Fixes
