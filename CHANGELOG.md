@@ -1,6 +1,35 @@
 # CHANGELOG
 
 
+## v4.10.5 (2026-07-07)
+
+### Bug Fixes
+
+- **mermaid-flow**: Route back-edge labels clear of node boxes
+  ([`54a0c31`](https://github.com/crouton-labs/termrender/commit/54a0c317f609c618bb2d6c8062eb65150f398f5b))
+
+A back-edge's C-path lane column was sized from just its own two endpoints (src/dst), not every node
+  in the graph, so its horizontal exit/entry legs — which travel along the source's/destination's
+  own rank-band row, a row every rank-mate box also occupies — could run straight through (and its
+  label land inside) whichever sibling boxes sat between the endpoint and the lane column.
+
+- _lane_secondary_base now reaches past every placed node's far edge, not just the one back-edge's
+  own src/dst boxes. - A back-edge's label always addresses its own dedicated lane (middle) segment
+  directly, mirroring _forward_row_overrides' existing jog-segment addressing, instead of
+  _longest_segment's raw-length heuristic — which could pick a crowded exit/entry leg over the
+  genuinely open lane column whenever a source rank was wide. - Replaced the flat per-back-edge
+  lane_counter increment with _lane_offsets: a precomputed, label-width-aware step (mirrors
+  _rank_gap_overrides for the rank axis) so two labeled back-edges landing near each other get
+  pushed apart enough for both labels to read with a clear buffer, not flush against each other's
+  lane line. - The vertical-segment label-placement branch now prefers a buffered row (like the
+  horizontal branch's _row_clear_span) before falling back to an unbuffered one, closing the same
+  fused-against-a-foreign- line defect for lane labels that the prior session closed for jog labels.
+
+Regression tests: an engine-level FlowGraph case (crowded source rank) in
+  test_mermaid_flow_layout.py, and the exact classDiagram repro in test_mermaid_class.py — both
+  assert the label doesn't overlap any node's box cells and fail against the pre-fix commit.
+
+
 ## v4.10.4 (2026-07-07)
 
 ### Bug Fixes
