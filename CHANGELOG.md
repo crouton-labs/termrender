@@ -1,6 +1,49 @@
 # CHANGELOG
 
 
+## v4.9.1 (2026-07-07)
+
+### Bug Fixes
+
+- **mermaid-flow**: Stop dropping edge labels/markers on a shared exit anchor
+  ([`552d3d3`](https://github.com/crouton-labs/termrender/commit/552d3d3deef061e23c5b894852ae024065366eb8))
+
+When 2+ edges leave one node through the router's single fixed exit anchor (e.g. two forward edges
+  in LR/RL, or a diamond node's right side), two defects followed:
+
+- Label drop: the shared first segment of each edge's Z-path could tie in length with each edge's
+  own distinguishing segment further along - routine in LR/RL, where a node's fan-out run and its
+  branch runs often measure the same few cells. _longest_segment's old first-wins tie-break always
+  picked that shared segment for both edges' labels, so the second label landed on cells the first
+  already claimed and silently vanished. Fixed by breaking ties toward the *last* segment instead -
+  the segment nearest each edge's own destination, which is never shared. TB is unaffected (its
+  branch runs are typically much longer than the shared trunk, so no tie exists there to begin
+  with).
+
+- Marker drop: a source-side arrow-kind marker glyph (UML composition and aggregation diamonds)
+  drawn at the shared anchor cell survived only for the last-drawn edge. Fixed via a new pre-pass,
+  _allocate_edge_anchors, that spreads a group's exit points along the node's side - but only when
+  2+ of that group's edges actually carry a source-side marker. Plain, markerless fan-outs (by far
+  the common case) keep sharing one exit cell, since that's what makes draw_segment's junction
+  bitmask resolve into a single clean tee rather than two disjoint stubs - spreading those would
+  only change where the fan visually splits, not fix anything, and would break the existing
+  trunk-then-tee golden output for every unlabeled fan-out/merge case.
+
+Anchor spreading is shape-aware for NodeShape.DIAMOND (the only shape whose left/right sides aren't
+  straight across their full bounding-rect span) so a spread point never lands in the diamond's
+  tapered corner region.
+
+Removes the "known limitation" paragraph from mermaid_class.py's docstring now that the
+  composition/aggregation marker case it described is fixed.
+
+Goldens touched: added test_lr_fan_out_with_labels_both_present_golden (new - pins the fixed LR
+  output, previously buggy/missing) and test_two_source_side_markers_from_one_class_both_survive
+  (new). No existing golden was changed - the fan-out/merge goldens (test_fan_out_golden,
+  test_multi_parent_dag_golden, test_td_direction_golden, test_lr_direction_golden) are
+  byte-for-byte unchanged because none of their edges carry a source-side marker, so the new
+  anchor-spread never triggers for them.
+
+
 ## v4.9.0 (2026-07-07)
 
 ### Features
