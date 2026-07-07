@@ -1,6 +1,23 @@
 # CHANGELOG
 
 
+## v4.9.0 (2026-07-07)
+
+### Features
+
+- **mermaid-er**: Native erDiagram renderer
+  ([`caae993`](https://github.com/crouton-labs/termrender/commit/caae9930b6a996e33b401dc773c5a9aae01b1529))
+
+Parses mermaid erDiagram source (entity attribute blocks with PK/FK/UK markers and quoted comments,
+  bare entities, the full crow's-foot cardinality grammar in both writing directions, identifying/
+  non-identifying relationship lines, entity/attribute aliasing and quoted names) into the shared
+  FlowGraph model and hands it to the existing layout_flowgraph engine (compartmented boxes, edge
+  labels). Never crashes: unparseable input degrades to a raw echo with no box-drawing glyphs,
+  matching mermaid_class.py's contract.
+
+Not wired into mermaid.py's dispatcher (later phase). Read-only against mermaid_flow*.py.
+
+
 ## v4.8.0 (2026-07-07)
 
 ### Features
