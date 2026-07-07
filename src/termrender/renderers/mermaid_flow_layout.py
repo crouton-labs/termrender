@@ -107,6 +107,25 @@ Known degradations (by design, not bugs)
   :class:`FlowGraph`) is silently skipped rather than raised — the parser is
   expected to guarantee valid endpoints, but this module never crashes on a
   dangling reference.
+
+UML extension points (compartments and arrow kinds)
+-----------------------------------------------------
+Two opt-in, backward-compatible extension points support UML-flavored
+callers (e.g. the mermaid class-diagram renderer) reusing this engine
+rather than duplicating its layout/routing:
+
+- A :class:`FlowNode` with ``compartments`` set draws as a plain rectangle
+  with a horizontal separator row between each compartment (see
+  :meth:`Canvas._draw_rect_compartments` and :func:`_compartment_box_dims`)
+  instead of the shape-specific single-label border — the mechanism behind
+  a class diagram's name/fields/methods bands. ``compartments is None``
+  (every existing caller) is byte-for-byte the original path.
+- A :class:`FlowEdge`'s ``dst_arrow_kind``/``src_arrow_kind`` (default
+  ``"default"``) select a glyph family independent of ``style`` —
+  ``"triangle_hollow"`` (inheritance/realization), ``"diamond_filled"``
+  (composition) and ``"diamond_hollow"`` (aggregation) — layered on top of
+  the existing direction-computed ``▼▲▶◀`` selection (see
+  :func:`_arrow_glyph`).
 """
 
 from __future__ import annotations
@@ -235,7 +254,13 @@ class Canvas:
             return False
         return self.reserved[y][x]
 
-    def draw_box(self, rect: "BoxRect", shape: NodeShape, label: str) -> None:
+    def draw_box(
+        self,
+        rect: "BoxRect",
+        shape: NodeShape,
+        label: str,
+        compartments: list[list[str]] | None = None,
+    ) -> None:
         """Draw a bordered box + centered wrapped label; reserve every cell.
 
         Dispatches to a shape-specific border drawer. Every drawer reserves
@@ -246,11 +271,68 @@ class Canvas:
         keeps every shape's anchor points (``top_mid``/``bottom_mid``/etc.,
         defined on the bounding rect) meaningful and keeps routing safety
         independent of each shape's exact visual outline.
+
+        ``compartments``, when not ``None``, bypasses the shape drawer
+        entirely in favor of :meth:`_draw_rect_compartments` (a plain
+        rectangle is the only sensible outline for a multi-band UML box
+        regardless of the node's declared ``shape``) — see
+        :class:`~termrender.renderers.mermaid_flow_model.FlowNode`'s
+        ``compartments`` field.
         """
         if rect.w <= 0 or rect.h <= 0:
             return
+        if compartments is not None:
+            self._draw_rect_compartments(rect, compartments)
+            return
         drawer = _SHAPE_DRAWERS.get(shape, Canvas._draw_rect)
         drawer(self, rect, label or "")
+
+    def _draw_rect_compartments(
+        self, rect: "BoxRect", compartments: list[list[str]]
+    ) -> None:
+        """UML-style compartmented rectangle: a plain rect border with a
+        horizontal ``├──┤`` separator row between adjacent compartments (a
+        class diagram's name / fields / methods bands). Each compartment's
+        lines are drawn exactly as given — no re-wrapping, callers
+        pre-format each line to whatever width they want reflected in the
+        box — so sizing (:func:`_compartment_box_dims`) and drawing always
+        agree on the box's extents. The first compartment (conventionally a
+        class/entity name) is centered; later compartments (fields,
+        methods, ...) are left-indented by one cell, so the member list
+        reads apart from the centered header the way UML tooling usually
+        sets them apart. An empty compartment (no lines at all) still
+        renders as one blank interior row, so its separators remain visible
+        either side of it."""
+        x, y, w, h = rect.x, rect.y, rect.w, rect.h
+        right, bottom = x + w - 1, y + h - 1
+        inner_left, inner_right = x + 1, right - 1
+        inner_w = max(inner_right - inner_left + 1, 0)
+        self.set_char(x, y, "\u250c", reserve=True)
+        self.set_char(right, y, "\u2510", reserve=True)
+        self.set_char(x, bottom, "\u2514", reserve=True)
+        self.set_char(right, bottom, "\u2518", reserve=True)
+        for cx in range(x + 1, right):
+            self.set_char(cx, y, "\u2500", reserve=True)
+            self.set_char(cx, bottom, "\u2500", reserve=True)
+
+        cy = y + 1
+        n = len(compartments)
+        for i, comp in enumerate(compartments):
+            lines = comp if comp else [""]
+            for line in lines:
+                self.set_char(x, cy, "\u2502", reserve=True)
+                self.set_char(right, cy, "\u2502", reserve=True)
+                text = visual_center(line, inner_w) if i == 0 else " " + line
+                for j in range(inner_w):
+                    ch = text[j] if j < len(text) else " "
+                    self.set_char(inner_left + j, cy, ch, reserve=True)
+                cy += 1
+            if i < n - 1:
+                self.set_char(x, cy, "\u251c", reserve=True)
+                self.set_char(right, cy, "\u2524", reserve=True)
+                for cx in range(x + 1, right):
+                    self.set_char(cx, cy, "\u2500", reserve=True)
+                cy += 1
 
     def _reserve_blank(self, rect: "BoxRect") -> None:
         """Fill the whole bounding rect with reserved blanks — the common
@@ -675,6 +757,33 @@ def _diamond_taper(content_w: int) -> int:
     return _DIAMOND_MIN_TAPER if content_w <= 3 else _DIAMOND_MAX_TAPER
 
 
+def _compartment_box_dims(compartments: list[list[str]]) -> tuple[int, int]:
+    """Content-driven extents for a UML-style compartmented box: width from
+    the widest line across *every* compartment (no per-line wrap — see
+    :meth:`Canvas._draw_rect_compartments`), height from the total line
+    count plus one separator row between each adjacent pair of
+    compartments. Mirrors :func:`_box_dims`'s ``+4``/``+2`` border+padding
+    convention so a compartmented box sizes consistently with a plain one.
+    """
+    all_lines = [line for comp in compartments for line in (comp if comp else [""])]
+    content_w = max((visual_len(line) for line in all_lines), default=0)
+    content_h = sum(len(comp) if comp else 1 for comp in compartments)
+    separators = max(len(compartments) - 1, 0)
+    w = max(content_w + 4, _MIN_BOX_W)
+    h = max(content_h + separators + 2, _MIN_BOX_H)
+    return w, h
+
+
+def _box_dims_for_node(n: FlowNode) -> tuple[int, int]:
+    """Dispatch box sizing on whether ``n`` carries UML-style
+    ``compartments`` — the model-level extension point that keeps every
+    other node's sizing (and thus every existing golden-output test)
+    byte-for-byte unchanged."""
+    if n.compartments is not None:
+        return _compartment_box_dims(n.compartments)
+    return _box_dims(n.label, n.shape)
+
+
 def _box_dims(label: str, shape: NodeShape = NodeShape.RECT) -> tuple[int, int]:
     """Content-driven box extents (cells), used both to size the grandalf
     ``VertexViewer`` and later to actually draw the box — sizing always goes
@@ -774,7 +883,7 @@ def _place_nodes(
     node_subgraph: dict[str, str] | None = None,
 ) -> dict[str, BoxRect]:
     node_subgraph = node_subgraph or {}
-    dims = {n.id: _box_dims(n.label, n.shape) for n in nodes}
+    dims = {n.id: _box_dims_for_node(n) for n in nodes}
     native = {
         n.id: _native_extents(direction, *dims[n.id]) for n in nodes
     }
@@ -1083,6 +1192,28 @@ _ARROW_GLYPHS: dict[tuple[int, int], str] = {
     (0, -1): "\u25b2",  # ▲
 }
 
+# Direction-aware hollow-triangle glyphs for FlowEdge.dst_arrow_kind/
+# src_arrow_kind == "triangle_hollow" (UML inheritance/realization) — same
+# shape as _ARROW_GLYPHS, hollow instead of filled.
+_HOLLOW_TRIANGLE_GLYPHS: dict[tuple[int, int], str] = {
+    (1, 0): "\u25b7",   # ▷
+    (-1, 0): "\u25c1",  # ◁
+    (0, 1): "\u25bd",   # ▽
+    (0, -1): "\u25b3",  # △
+}
+
+# arrow-kind name -> either a direction glyph table (looked up the same way
+# as _ARROW_GLYPHS) or a single direction-invariant glyph string (a diamond
+# reads the same rotated, so composition/aggregation need no per-direction
+# variants). An unrecognized kind (defensive: a hand-built FlowEdge with a
+# typo'd kind string) falls back to "default" rather than raising.
+_ARROW_KIND_GLYPHS: dict[str, dict[tuple[int, int], str] | str] = {
+    "default": _ARROW_GLYPHS,
+    "triangle_hollow": _HOLLOW_TRIANGLE_GLYPHS,
+    "diamond_filled": "\u25c6",   # ◆ — composition
+    "diamond_hollow": "\u25c7",   # ◇ — aggregation
+}
+
 
 def _facing_anchor(this: BoxRect, other: BoxRect) -> tuple[int, int]:
     """Pick the border midpoint of ``this`` box facing toward ``other`` —
@@ -1096,15 +1227,24 @@ def _facing_anchor(this: BoxRect, other: BoxRect) -> tuple[int, int]:
     return this.right_mid if dx >= 0 else this.left_mid
 
 
-def _arrow_glyph(frm: tuple[int, int], to: tuple[int, int]) -> str:
-    """``▼▲▶◀`` for the direction of travel from ``frm`` to ``to`` — the
-    glyph an arrowhead landing at ``to`` should show."""
+def _arrow_glyph(
+    frm: tuple[int, int], to: tuple[int, int], kind: str = "default"
+) -> str:
+    """The glyph an arrowhead landing at ``to`` should show, for the
+    direction of travel from ``frm`` to ``to``. ``kind`` (see
+    ``FlowEdge.dst_arrow_kind``/``src_arrow_kind``) selects the glyph
+    family; ``"default"`` reproduces the original ``▼▲▶◀`` filled-triangle
+    behavior exactly. A direction-invariant kind (a diamond) ignores
+    ``frm``/``to`` beyond the degenerate same-point guard."""
+    table = _ARROW_KIND_GLYPHS.get(kind, _ARROW_GLYPHS)
+    if isinstance(table, str):
+        return table
     dx, dy = to[0] - frm[0], to[1] - frm[1]
     if dx == 0 and dy == 0:
-        return _ARROW_GLYPHS[(0, 1)]
+        return table[(0, 1)]
     if abs(dx) >= abs(dy):
-        return _ARROW_GLYPHS[(1 if dx > 0 else -1, 0)]
-    return _ARROW_GLYPHS[(0, 1 if dy > 0 else -1)]
+        return table[(1 if dx > 0 else -1, 0)]
+    return table[(0, 1 if dy > 0 else -1)]
 
 
 def _rank_is_horizontal(direction: Direction) -> bool:
@@ -1341,9 +1481,13 @@ def _draw_polyline(canvas: Canvas, points: list[tuple[int, int]], style: EdgeSty
 
 def _draw_arrowheads(canvas: Canvas, points: list[tuple[int, int]], edge: FlowEdge) -> None:
     if edge.dst_arrow:
-        canvas.draw_glyph(*points[-1], _arrow_glyph(points[-2], points[-1]))
+        canvas.draw_glyph(
+            *points[-1], _arrow_glyph(points[-2], points[-1], edge.dst_arrow_kind)
+        )
     if edge.src_arrow:
-        canvas.draw_glyph(*points[0], _arrow_glyph(points[1], points[0]))
+        canvas.draw_glyph(
+            *points[0], _arrow_glyph(points[1], points[0], edge.src_arrow_kind)
+        )
 
 
 def _self_loop_points(
@@ -1499,7 +1643,7 @@ def layout_flowgraph(g: FlowGraph, width: int) -> list[str]:
         for n in g.nodes:
             rect = rects.get(n.id)
             if rect is not None:
-                canvas.draw_box(rect, n.shape, n.label)
+                canvas.draw_box(rect, n.shape, n.label, n.compartments)
         # Two passes across *all* edges, not one pass per edge: every
         # edge's line + arrowheads draw first, then every edge's label
         # draws last (see design doc). Interleaving line-then-label per

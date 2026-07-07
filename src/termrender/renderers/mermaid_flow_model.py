@@ -77,11 +77,20 @@ class FlowNode:
     """A graph node. ``id`` is the graph key (dedup + edge endpoints);
     ``label`` is the drawn text. Bare ``A`` yields ``id == label == "A"``.
     Re-declaring an id keeps the first-seen node; a later declaration that
-    carries a shape/label updates it in place (parser policy)."""
+    carries a shape/label updates it in place (parser policy).
+
+    ``compartments``, when not ``None``, overrides ``label`` for box
+    content: each element is one UML-style compartment (a pre-formatted
+    list of lines drawn as-is, no further word-wrap), and the engine draws
+    a horizontal ``├──┤`` separator between adjacent compartments (e.g. a
+    class diagram's name / fields / methods bands). ``None`` (the default)
+    preserves the original single-``label`` rendering path exactly —
+    existing callers are unaffected."""
 
     id: str
     label: str
     shape: NodeShape = NodeShape.RECT
+    compartments: list[list[str]] | None = None
 
 
 @dataclass
@@ -90,7 +99,19 @@ class FlowEdge:
     drawn arrowheads: ``-->`` → dst_arrow=True, src_arrow=False; ``---`` → both
     False (plain line); ``<-->`` → both True. ``label`` is the optional edge
     label (``|text|`` or the ``-- text -->`` inline form); ``None`` when absent
-    (empty-string labels are stored as ``None``)."""
+    (empty-string labels are stored as ``None``).
+
+    ``dst_arrow_kind``/``src_arrow_kind`` pick the *glyph family* drawn at
+    each arrowed end, independent of ``dst_arrow``/``src_arrow`` (whether an
+    arrow is drawn at all) and independent of ``style`` (line weight).
+    ``"default"`` (the default for both) reproduces the original
+    direction-only ``▲▼◀▶`` filled-triangle selection exactly. Other
+    recognized kinds — used by UML-flavored callers such as the mermaid
+    class-diagram renderer — are ``"triangle_hollow"`` (inheritance/
+    realization, direction-aware △▽◁▷), ``"diamond_filled"`` (composition,
+    a direction-invariant ◆) and ``"diamond_hollow"`` (aggregation, a
+    direction-invariant ◇). An unrecognized kind string falls back to
+    ``"default"`` rather than raising."""
 
     src: str
     dst: str
@@ -98,6 +119,8 @@ class FlowEdge:
     label: str | None = None
     dst_arrow: bool = True
     src_arrow: bool = False
+    dst_arrow_kind: str = "default"
+    src_arrow_kind: str = "default"
 
 
 @dataclass
