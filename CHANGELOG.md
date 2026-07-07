@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## v4.10.3 (2026-07-07)
+
+### Bug Fixes
+
+- **mermaid**: Strict degradation — unrecognized syntax raw-echoes instead of half-rendering
+  ([`904d1cc`](https://github.com/crouton-labs/termrender/commit/904d1ccaa5c012bbeefdc8f351fb25164b0c3778))
+
+Enforce the native Mermaid degradation contract across flowchart, classDiagram, stateDiagram-v2, and
+  erDiagram renderers: only well-formed presentational/accessibility directives are skipped, while
+  unsupported statements, dangling connectors, stray closers, and unterminated structural blocks now
+  fail parsing and raw-echo the entire original source.
+
+Consolidate raw-echo glyph scrubbing in mermaid_degradation.py and update the dispatcher/renderers
+  to import the shared helper so every degradation path removes box/geometric glyphs consistently.
+
+Flip the parser-level tests that previously pinned best-effort recovery for malformed flowcharts to
+  expect FlowchartError, and flip the state stray-close-brace render test to expect raw echo. Add
+  regression coverage for the review repros, malformed directive-shaped lines, valid accessibility
+  colon forms, and native rendering of valid presentational directives.
+
+Refresh renderer docs and architecture metadata away from the removed Go/mermaid-ascii path, and add
+  minimal pytest project config so the required exact 'uv run pytest' gate imports the src package
+  in this repository.
+
+
 ## v4.10.2 (2026-07-07)
 
 ### Bug Fixes
