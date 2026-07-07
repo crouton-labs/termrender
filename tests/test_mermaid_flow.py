@@ -190,6 +190,57 @@ def test_multi_parent_dag_attaches_both_edges_to_shared_child():
 
 
 # --------------------------------------------------------------------------
+# Smoke: labeled fan-in/fan-out around one decision node
+# --------------------------------------------------------------------------
+
+
+def test_labeled_fan_in_and_fan_out_around_one_decision_node():
+    # Check is a crowded junction: two labeled edges fan in (go, wait, both
+    # crossing the same Alpha/Beta-to-Check band) and two fan out (yes, no,
+    # both crossing the same Check-to-Proceed/Abort band). Each sibling in
+    # a band must get its own jog row so its label survives distinct and
+    # unfused, rather than the pair piling onto one shared row.
+    source = (
+        "flowchart TD\n"
+        "    Alpha -->|go| Check{Ready?}\n"
+        "    Beta -->|wait| Check\n"
+        "    Check -->|yes| Proceed[Continue]\n"
+        "    Check -->|no| Abort[Stop]\n"
+    )
+    lines = render_flowchart(source, width=100)
+    assert any(_BOX_GLYPH_RE.search(line) for line in lines)
+    text = "\n".join(lines)
+    labels = ["go", "wait", "yes", "no"]
+    for label in labels:
+        assert text.count(label) == 1, f"{label!r} must appear exactly once: {lines!r}"
+    for name in ("Alpha", "Beta", "Ready?", "Continue", "Stop"):
+        assert name in text
+
+    # None fused onto a node's own name/border row.
+    for label in labels:
+        row = _row_of(lines, label)
+        for name in ("Alpha", "Beta", "Ready?", "Continue", "Stop"):
+            assert name not in lines[row], (
+                f"{label!r} landed on {name}'s own row: {lines[row]!r}"
+            )
+
+    # None detached below the whole diagram body.
+    last_box_row = max(i for i, line in enumerate(lines) if _BOX_GLYPH_RE.search(line))
+    for label in labels:
+        row = _row_of(lines, label)
+        assert row <= last_box_row, f"{label!r} detached below the diagram: {lines!r}"
+
+    # Each pair of labeled edges sharing one band (fan-in into Check,
+    # fan-out from Check) must land on its own distinct row rather than
+    # fusing onto one shared row.
+    for a, b in (("go", "wait"), ("yes", "no")):
+        row_a, row_b = _row_of(lines, a), _row_of(lines, b)
+        assert row_a != row_b, (
+            f"{a!r} and {b!r} both landed on row {row_a}: {lines[row_a]!r}"
+        )
+
+
+# --------------------------------------------------------------------------
 # Headless edge — `---` draws a line with no arrowhead
 # --------------------------------------------------------------------------
 

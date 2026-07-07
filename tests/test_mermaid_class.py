@@ -250,6 +250,55 @@ def test_cardinality_without_label():
 # --------------------------------------------------------------------------
 
 
+def test_multiple_labeled_relationships_around_one_class():
+    # One class (Hub) is a crowded junction: six labeled UML relationships
+    # of different kinds all fan out from it, every one crossing the
+    # identical Hub-to-children band — each must get its own jog row so its
+    # label survives distinct and unfused rather than every edge piling
+    # onto one shared row. Each marker glyph must survive too (not just
+    # the last-drawn one).
+    src = (
+        "classDiagram\n"
+        "Hub <|-- Alpha : extends\n"
+        "Hub *-- Beta : has\n"
+        "Hub o-- Gamma : owns\n"
+        "Hub --> Delta : uses\n"
+        "Hub --> Echo : likes\n"
+        "Hub --> Foxtrot : needs\n"
+    )
+    lines = _lines(src, width=100)
+    joined = "\n".join(lines)
+    labels = ["extends", "has", "owns", "uses", "likes", "needs"]
+    for label in labels:
+        assert joined.count(label) == 1, f"{label!r} must appear exactly once: {lines!r}"
+    for name in ("Hub", "Alpha", "Beta", "Gamma", "Delta", "Echo", "Foxtrot"):
+        assert name in joined
+    assert "△" in joined  # Hub<|--Alpha (inheritance)
+    assert "◆" in joined  # Hub*--Beta (composition)
+    assert "◇" in joined  # Hub o-- Gamma (aggregation)
+
+    # None fused onto a class's own name/border row.
+    for label in labels:
+        row, _ = _row_col(lines, label)
+        for name in ("Hub", "Alpha", "Beta", "Gamma", "Delta", "Echo", "Foxtrot"):
+            assert name not in lines[row], (
+                f"{label!r} landed on {name}'s own row: {lines[row]!r}"
+            )
+
+    # None detached below the whole diagram body.
+    last_box_row = max(i for i, line in enumerate(lines) if _BOX_GLYPH_RE.search(line))
+    for label in labels:
+        row, _ = _row_col(lines, label)
+        assert row <= last_box_row, f"{label!r} detached below the diagram: {lines!r}"
+
+    # All six share the identical Hub-to-children band, so each must land
+    # on its own distinct row rather than fusing onto one shared row.
+    rows = [_row_col(lines, label)[0] for label in labels]
+    assert len(set(rows)) == len(labels), (
+        f"labels shared a row instead of each getting its own: {lines!r}"
+    )
+
+
 def test_all_six_relation_kinds_chained_topology():
     src = (
         "classDiagram\n"

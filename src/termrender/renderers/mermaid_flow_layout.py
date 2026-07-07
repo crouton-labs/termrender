@@ -73,14 +73,22 @@ BT/LR/RL); a same-rank edge uses the two boxes' facing side mids; a back-edge
 perpendicular to the rank axis and routes through a growing side lane so
 stacked back-edges never collide (the right side for TB/BT, the bottom side
 for LR/RL, per the axis swap). Forward paths are a single straight run when
-the two anchors already share a column/row, else a Z/staircase through the
-midpoint of the clear inter-rank band. Arrowheads (``▼▲▶◀``) are chosen from
-the final segment's direction of travel and overwrite the border cell they
-land on. Edge labels center on the path's longest straight run, shifting
-along it to the nearest cell span clear of any box if the ideal midpoint
-lands on one. Self-loops (``src == dst``, excluded from the grandalf graph)
-draw a small loop off the same side used for back-edge lanes, stacking
-outward per repeated self-loop on one node.
+the two anchors already share a column/row, else a Z/staircase through a jog
+row/column between the two ranks' facing borders. That jog defaults to the
+band's midpoint, but when 2+ labeled forward edges cross the identical
+inter-rank band (TB/BT only — one node fanning out to, or in from, several
+labeled neighbors across the same rank transition), each gets its own jog
+row spread across the band's interior instead of stacking on one shared row
+(:func:`_forward_row_overrides`; the band itself is pre-widened to fit them,
+see :func:`_rank_gap_overrides`). Arrowheads (``▼▲▶◀``) are chosen from the
+final segment's direction of travel and overwrite the border cell they land
+on. Edge labels center on the path's longest straight run (or, for a
+row-stacked edge, its own dedicated jog segment specifically), shifting
+along it to the nearest cell span clear of a box, a subgraph frame title, a
+sibling edge's already-drawn line, or an already-placed label. Self-loops
+(``src == dst``, excluded from the grandalf graph) draw a small loop off the
+same side used for back-edge lanes, stacking outward per repeated self-loop
+on one node.
 
 The router draws only axis-aligned L/Z/C paths and does no global crossing
 minimization or obstacle avoidance — a path that would cross another box
@@ -858,17 +866,27 @@ def _rank_gap_overrides(
     reads along, so it genuinely needs ``visual_len(label)`` cells of
     width — at the base ``_ROW_GAP`` a label wider than a couple of cells
     has nowhere to go but onto the boxes it connects (the short
-    LR/adjacent-rank clipped-label bug this closes). For TB/BT the band
-    stays vertical on screen and the label is drawn horizontally *across*
-    the connector column (:func:`_draw_label_on_segment`'s vertical-segment
-    branch) — it needs a little row headroom to have its own clear row,
-    not a row per character, so it gets the small constant
-    ``_LABELED_ROW_GAP`` regardless of the label's length.
+    LR/adjacent-rank clipped-label bug this closes); when several labeled
+    edges share one LR/RL transition their labels land at different
+    *secondary* (row) coordinates already (different destination nodes),
+    so only the widest single label's width matters here, not the count.
+    For TB/BT the band stays vertical on screen and each label is drawn
+    horizontally *across* the connector column (:func:`_draw_label_on_segment`'s
+    vertical-segment branch), one label per row — a single labeled edge
+    needs only the small constant ``_LABELED_ROW_GAP`` (one blank row, the
+    label's own row, one more blank row), but when ``n`` labeled edges
+    cross the *same* adjacent-rank transition (e.g. one node forward-fans
+    into several labeled destinations, or several labeled sources converge
+    on one destination) each needs its own row, one blank row apart from
+    its neighbors, so the gap grows by 2 native rows per additional edge
+    (see :func:`_forward_row_overrides`, which spreads each such edge's
+    jog row across this now-widened band's interior).
 
     Non-adjacent-rank edges (back-edges, multi-rank spans) don't constrain
     the gap here — they route through their own side lane, not this band.
     """
     overrides: dict[int, int] = {}
+    counts: dict[int, int] = defaultdict(int)
     horizontal_on_screen = direction in (Direction.LR, Direction.RL)
     for e in edges:
         if e.src == e.dst or not e.label:
@@ -880,11 +898,16 @@ def _rank_gap_overrides(
         lo_r, hi_r = (r_src, r_dst) if r_src <= r_dst else (r_dst, r_src)
         if hi_r - lo_r != 1:
             continue
+        counts[lo_r] += 1
         if horizontal_on_screen:
             needed = visual_len(e.label) + 2 * _LABEL_GAP_PAD
         else:
             needed = _LABELED_ROW_GAP
         overrides[lo_r] = max(overrides.get(lo_r, _ROW_GAP), needed)
+    if not horizontal_on_screen:
+        for lo_r, n in counts.items():
+            if n > 1:
+                overrides[lo_r] = max(overrides[lo_r], _LABELED_ROW_GAP + (n - 1) * 2)
     return overrides
 
 
@@ -1494,28 +1517,30 @@ def _spread_group_anchors(
     edges: list[FlowEdge],
     node_by_id: dict[str, "FlowNode"],
     groups: dict[tuple[str, str], list[int]],
-    is_marked,
+    needs_spread,
     other_end,
 ) -> dict[int, tuple[int, int]]:
     """Shared spreading logic behind :func:`_allocate_edge_anchors`'s two
     passes (source exits, destination entries): for each ``(node_id,
     side)`` group of 2+ edges that share a border side at ``node_id``,
-    spread their anchor points along that side's usable span (see
+    spread every edge in the group along that side's usable span (see
     :func:`_side_interior_span`) — but only when 2+ of the group's edges
-    are ``is_marked`` (carry an arrow marker on the end at ``node_id``).
-    ``other_end(edge)`` gives the node id at the *other* end of an edge,
-    used only to order the spread left-to-right/top-to-bottom by where
-    each edge's far endpoint sits off-axis, so the spread reads in the
-    same visual order the paths already fan out in. Returns a dict keyed
-    by index into ``edges``; groups left ungrouped (size < 2) or
-    under-marked (< 2 marked) are entirely absent from it.
+    are ``needs_spread`` (carry an arrow marker on the end at ``node_id``,
+    or carry a label — see :func:`_allocate_edge_anchors` for why both
+    count as a reason to spread). ``other_end(edge)`` gives the node id at
+    the *other* end of an edge, used only to order the spread
+    left-to-right/top-to-bottom by where each edge's far endpoint sits
+    off-axis, so the spread reads in the same visual order the paths
+    already fan out in. Returns a dict keyed by index into ``edges``;
+    groups left ungrouped (size < 2) or with fewer than 2 edges needing a
+    spread are entirely absent from it.
     """
     overrides: dict[int, tuple[int, int]] = {}
     for (node_id, side), idxs in groups.items():
         if len(idxs) < 2:
             continue
-        marked = [i for i in idxs if is_marked(edges[i])]
-        if len(marked) < 2:
+        spreadable = [i for i in idxs if needs_spread(edges[i])]
+        if len(spreadable) < 2:
             continue
         rect = rects.get(node_id)
         if rect is None:
@@ -1543,44 +1568,46 @@ def _allocate_edge_anchors(
     the destination (``(dst, entry side)`` for forward edges, ``(dst, lane
     side)`` for back-edges, since a back-edge's destination anchor is also
     :func:`_lane_anchor`, the same physical side as its source anchor).
-    Within each group, spread the anchor points along that side's usable
-    span (see :func:`_side_interior_span`) — but **only** when 2+ of the
-    group's edges carry an arrow marker on the end at that shared node.
-    The two ends use different tests, deliberately not symmetric in *how*
-    they detect a marker even though the spreading they trigger is: an
-    exit group tests ``src_arrow or src_arrow_kind != "default"`` (a
-    source-side arrowhead of any kind is already rare — most edges have
-    none — so its mere presence is already a meaningful signal), while an
-    entry group tests only ``dst_arrow_kind != "default"`` (a
-    destination-side arrowhead is the *default* for an ordinary ``-->``
-    edge — ``dst_arrow`` is ``True`` almost everywhere — so testing its
-    bare presence would spread every ordinary fan-in; only a non-default
-    *kind*, the UML composition/aggregation diamond case documented in
-    ``mermaid_class.py``, is the actual collision this closes). Left
-    stacked on one shared anchor otherwise (the overwhelming majority of
-    groups): a plain, markerless
-    multi-edge fan-out (``A-->B; A-->C``) or fan-in (``A-->C; B-->C``)
-    *relies* on sharing one exit/entry cell for its trunk-then-tee look
-    (draw_segment's junction bitmask resolves the shared point into a
-    single ┬/┴, not two disjoint stubs) — spreading it would only change
-    this module's own aesthetic choice of where the fan visually splits,
-    not fix anything, and would break that look for every existing fan-
-    out/merge golden. A marker glyph, unlike a plain line junction, has no
-    such union — two different marker glyphs landing on one cell just
-    silently lose all but the last-drawn one, which is the actual defect
-    this closes, on whichever end (source or destination) carries the
-    colliding markers. (The sibling label-collision defect — two edges
-    from a shared exit tying for "longest straight run" so a second label
-    lands on cells the first already claimed — is fixed separately, in
-    :func:`_longest_segment`'s tie-break, since it needs no anchor change
-    at all.) Returns a ``(exit_overrides, entry_overrides)`` pair, each a
-    dict keyed by index into ``edges``; an edge absent from one keeps the
-    engine's single fixed anchor on that end (:func:`_forward_exit`/
-    :func:`_forward_entry`/:func:`_lane_anchor`) unchanged. Same-rank
-    edges and self-loops are never grouped here — same-rank anchors are
-    already per-pair (:func:`_facing_anchor`, dynamic per destination, not
-    a fixed shared side), and self-loops already stack via their own
-    ``self_loop_counter``-driven reach.
+    Within each group, spread every edge along that side's usable span
+    (see :func:`_side_interior_span`) — but **only** when 2+ of the
+    group's edges *need* it at that shared node: either carrying an arrow
+    marker on that end, or carrying a label. Both are first-class reasons
+    to spread, closing the same underlying defect from two different
+    angles: a marker glyph or a label is each something that specific
+    anchor cell must render distinctly, and two of either landing on one
+    shared cell silently loses all but the last-drawn one (for a label,
+    this shows up one step removed — via :func:`_longest_segment`'s
+    tie-break picking the same shared segment for two edges rather than
+    literally the same cell, but the fix is the same: give each edge its
+    own anchor so there is no shared segment/cell left to tie on).
+
+    The marker test is asymmetric between the two ends, deliberately not
+    symmetric in *how* it detects one even though the label test is
+    shared: an exit group tests ``src_arrow or src_arrow_kind !=
+    "default"`` (a source-side arrowhead of any kind is already rare —
+    most edges have none — so its mere presence is already a meaningful
+    signal), while an entry group tests only ``dst_arrow_kind !=
+    "default"`` (a destination-side arrowhead is the *default* for an
+    ordinary ``-->`` edge — ``dst_arrow`` is ``True`` almost everywhere —
+    so testing its bare presence would spread every ordinary fan-in; only
+    a non-default *kind*, the UML composition/aggregation diamond case
+    documented in ``mermaid_class.py``, is the actual collision this
+    closes). Left stacked on one shared anchor otherwise (the overwhelming
+    majority of groups): a plain edge with neither a marker nor a label —
+    an ordinary multi-edge fan-out (``A-->B; A-->C``) or fan-in
+    (``A-->C; B-->C``) — *relies* on sharing one exit/entry cell for its
+    trunk-then-tee look (draw_segment's junction bitmask resolves the
+    shared point into a single ┬/┴, not two disjoint stubs); spreading it
+    would only change this module's own aesthetic choice of where the fan
+    visually splits, not fix anything, and would break that look for
+    every existing fan-out/merge golden. Returns a ``(exit_overrides,
+    entry_overrides)`` pair, each a dict keyed by index into ``edges``; an
+    edge absent from one keeps the engine's single fixed anchor on that
+    end (:func:`_forward_exit`/:func:`_forward_entry`/:func:`_lane_anchor`)
+    unchanged. Same-rank edges and self-loops are never grouped here —
+    same-rank anchors are already per-pair (:func:`_facing_anchor`,
+    dynamic per destination, not a fixed shared side), and self-loops
+    already stack via their own ``self_loop_counter``-driven reach.
     """
     node_by_id = {n.id: n for n in (nodes or [])}
     exit_groups: dict[tuple[str, str], list[int]] = defaultdict(list)
@@ -1603,7 +1630,7 @@ def _allocate_edge_anchors(
         edges,
         node_by_id,
         exit_groups,
-        lambda e: e.src_arrow or e.src_arrow_kind != "default",
+        lambda e: e.src_arrow or e.src_arrow_kind != "default" or bool(e.label),
         lambda e: e.dst,
     )
     entry_overrides = _spread_group_anchors(
@@ -1612,7 +1639,7 @@ def _allocate_edge_anchors(
         edges,
         node_by_id,
         entry_groups,
-        lambda e: e.dst_arrow_kind != "default",
+        lambda e: e.dst_arrow_kind != "default" or bool(e.label),
         lambda e: e.src,
     )
     return exit_overrides, entry_overrides
@@ -1633,17 +1660,99 @@ def _real(direction: Direction, primary: int, secondary: int) -> tuple[int, int]
 
 
 def _z_path(
-    direction: Direction, exit_pt: tuple[int, int], entry_pt: tuple[int, int]
+    direction: Direction,
+    exit_pt: tuple[int, int],
+    entry_pt: tuple[int, int],
+    mid_p: int | None = None,
 ) -> list[tuple[int, int]]:
     """Forward-edge path: a single straight run when both anchors share the
     off-axis coordinate, else a Z/staircase — out of ``exit_pt``, across at
-    the midpoint between the two ranks' facing borders, into ``entry_pt``."""
+    the jog row/column between the two ranks' facing borders, into
+    ``entry_pt``. The jog coordinate defaults to the midpoint of the two
+    ranks' facing borders (``(p0 + p1) // 2``), but a caller sharing this
+    band with sibling labeled edges (see :func:`_forward_row_overrides`)
+    may pass its own ``mid_p`` so each sibling gets a distinct jog row
+    instead of every edge crossing the same two ranks stacking their
+    labels on the identical row. Passing ``mid_p`` also forces the 4-point
+    staircase even when the anchors already share a column/row (``s0 ==
+    s1``) — a caller only supplies ``mid_p`` because it specifically wants
+    a dedicated jog row for its label, so collapsing to a straight 2-point
+    run in that case would defeat the whole point.
+    """
     p0, s0 = _abstract(direction, exit_pt)
     p1, s1 = _abstract(direction, entry_pt)
-    if s0 == s1:
+    if s0 == s1 and mid_p is None:
         return [exit_pt, entry_pt]
-    mid_p = (p0 + p1) // 2
-    return [exit_pt, _real(direction, mid_p, s0), _real(direction, mid_p, s1), entry_pt]
+    m = mid_p if mid_p is not None else (p0 + p1) // 2
+    return [exit_pt, _real(direction, m, s0), _real(direction, m, s1), entry_pt]
+
+
+def _forward_row_overrides(
+    rects: dict[str, BoxRect], direction: Direction, edges: list[FlowEdge]
+) -> dict[int, int]:
+    """Per-edge jog-row (``mid_p``) override for :func:`_z_path`, one entry
+    per index into ``edges``, spreading multiple labeled forward edges that
+    cross the identical inter-rank band into distinct rows within that
+    band's interior, so N labeled edges diverging from (or converging on)
+    one node each get their own jog row — and therefore their own label
+    row — instead of every edge crossing the same two ranks piling onto
+    the shared default midpoint (every edge crossing the same two ranks
+    shares that band, see :func:`_rank_gap_overrides`).
+
+    Grouped by an edge's ``(p0, p1)`` band — the *un-overridden*
+    :func:`_forward_exit`/:func:`_forward_entry` border rows on the real
+    placed rects, which is identical for every edge crossing the same two
+    ranks (ranks are top-of-band aligned, see the adapter docstring) — so
+    no grandalf rank number needs threading through to the router. Only
+    groups of size 2+ get an override; a lone edge through a band is left
+    out of the returned dict entirely, so :func:`_z_path` falls through to
+    its own default midpoint — the exact value ``_spread_points`` would
+    also produce for ``n == 1`` over this same interior span, so skipping
+    the group entirely keeps this pass a no-op on every single-label-per-band
+    render.
+
+    TB/BT only. In a TB/BT fan-out/fan-in, sibling edges crossing the same
+    rank transition default to the *identical* jog row (``_z_path``'s
+    ``(p0 + p1) // 2``), so spreading them apart here is what keeps their
+    labels off one shared row. In LR/RL the rank axis is horizontal, so
+    that same shared band is a jog *column*, and sibling edges diverging
+    to (or converging from) distinct secondary rows already write their
+    labels on distinct rows by construction — nothing to stack there.
+    Forcing a spread in LR/RL would be a real correctness bug: the render
+    loop treats any row-overridden forward edge's dedicated jog segment as
+    the one to label outright (skipping :func:`_longest_segment`'s
+    ordinary tie-break), but for LR/RL that jog segment is the *vertical*
+    middle leg of the Z-path, not the horizontal run beside the arrowhead
+    that :func:`_longest_segment`'s last-segment tie-break deliberately
+    prefers — forcing it would detach the label onto a different row than
+    the arrowhead it labels.
+    """
+    if _rank_is_horizontal(direction):
+        return {}
+    groups: dict[tuple[int, int], list[int]] = defaultdict(list)
+    for i, e in enumerate(edges):
+        if e.src == e.dst or not e.label:
+            continue
+        if _classify_edge(rects, direction, e) != "forward":
+            continue
+        src_rect, dst_rect = rects.get(e.src), rects.get(e.dst)
+        if src_rect is None or dst_rect is None:
+            continue
+        p0, _s0 = _abstract(direction, _forward_exit(direction, src_rect))
+        p1, _s1 = _abstract(direction, _forward_entry(direction, dst_rect))
+        if p0 == p1:
+            continue
+        lo, hi = (p0, p1) if p0 <= p1 else (p1, p0)
+        groups[(lo, hi)].append(i)
+
+    overrides: dict[int, int] = {}
+    for (lo, hi), idxs in groups.items():
+        if len(idxs) < 2:
+            continue
+        rows = _spread_points(lo + 1 + _LABEL_GAP_PAD, hi - 1 - _LABEL_GAP_PAD, len(idxs))
+        for idx, row in zip(idxs, rows):
+            overrides[idx] = row
+    return overrides
 
 
 def _lane_path(
@@ -1711,19 +1820,28 @@ def _longest_segment(
 
 
 def _label_positions(length: int, center: int, lo: int, hi: int) -> list[int]:
-    """Candidate run-start offsets within ``[lo, hi]``, nearest-``center``
-    first — how a label shifts off a reserved cell to the nearest clear
-    run along its segment."""
-    span = max(hi - lo + 1, 1)
-    if hi - lo + 1 >= length:
-        ideal = max(lo, min(center - length // 2, hi - length + 1))
-    else:
-        ideal = lo
+    """Candidate run-start offsets, nearest-``center`` first, for a run of
+    ``length`` cells that fits entirely within ``[lo, hi]`` — how a label
+    shifts off a reserved cell to the nearest clear run along its segment.
+    A candidate is a *start* offset, so the valid range for one is
+    ``[lo, hi - length + 1]``, not ``[lo, hi]`` itself: a start any later
+    than that would spill the run's tail past ``hi`` — e.g. onto whatever
+    real wall (a box border, a segment's own arrowhead-adjacent endpoint)
+    is the very thing ``hi`` was computed to stay clear of. When the span
+    is narrower than ``length`` altogether, no start can avoid spilling,
+    so this falls back to ``lo`` alone (the caller's overflow-tolerated
+    path handles writing past the end from there).
+    """
+    if hi - lo + 1 < length:
+        return []
+    lo_start, hi_start = lo, hi - length + 1
+    ideal = max(lo_start, min(center - length // 2, hi_start))
+    span = hi_start - lo_start + 1
     order = [ideal]
     seen = {ideal}
     for d in range(1, span + 1):
         for cand in (ideal + d, ideal - d):
-            if cand not in seen:
+            if cand not in seen and lo_start <= cand <= hi_start:
                 order.append(cand)
                 seen.add(cand)
     return order
@@ -1787,72 +1905,277 @@ def _write_label_run(
         x += w
 
 
+_LABEL_SCAN_CAP = 400  # generous bound on how far a label's clear-run search
+                       # scans a row outward from its ideal center before
+                       # giving up on widening — large enough to cross an
+                       # entire small-to-medium (<=20 node) diagram's blank
+                       # inter-rank gap, cheap enough to never matter for
+                       # performance at that scale.
+
+
+def _segment_cells(a: tuple[int, int], b: tuple[int, int]) -> frozenset[tuple[int, int]]:
+    """Every cell on the straight run ``a``-``b`` (inclusive) — the set a
+    label placement search exempts from :func:`_cell_blocks_label`'s
+    occupied test, since that line belongs to the very edge being labeled
+    and is expected to be overwritten by its own label (the normal
+    ``───label───`` look), not treated as a collision the way a passing
+    *sibling* edge's line is.
+    """
+    (x0, y0), (x1, y1) = a, b
+    if x0 == x1:
+        lo, hi = (y0, y1) if y0 <= y1 else (y1, y0)
+        return frozenset((x0, y) for y in range(lo, hi + 1))
+    lo, hi = (x0, x1) if x0 <= x1 else (x1, x0)
+    return frozenset((x, y0) for x in range(lo, hi + 1))
+
+
+def _cell_blocks_label(
+    canvas: Canvas, x: int, y: int, own_cells: frozenset[tuple[int, int]]
+) -> bool:
+    """True when ``(x, y)`` should block a label's placement search:
+    either formally reserved (a box border/interior, a subgraph frame
+    title, an already-placed label) or already carrying a drawn
+    connector-line/arrowhead glyph from some *other* edge. Line-drawing
+    cells are never marked reserved (:class:`Canvas` reserves only for
+    routing safety, not visual occupancy — a line may cross another
+    line's cell freely), so without this a label's clear-run search would
+    consider a passing sibling edge's ``│``/``─`` invisible and land
+    flush against — or straight through — it: the same fused-label defect
+    this router closes for box borders, just against a line instead of a
+    border. ``own_cells`` (see :func:`_segment_cells`) exempts the label's
+    own edge's own path, which is expected to be overwritten by its own
+    label, not avoided.
+    """
+    if (x, y) in own_cells:
+        return False
+    return canvas.is_reserved(x, y) or canvas.get_char(x, y) != " "
+
+
+def _row_clear_span(
+    row: int, near_x: int, blocked: Callable[[int, int], bool]
+) -> tuple[int, int]:
+    """The maximal blank run on ``row`` reachable from ``near_x`` without
+    crossing a cell ``blocked`` (see :func:`_cell_blocks_label`) considers
+    occupied — a box border, a subgraph frame title, an already-placed
+    label, or a sibling edge's already-drawn connector line — with a
+    mandatory 1-cell buffer kept from whichever blocked cell actually
+    stopped the scan (no buffer needed against the canvas's own edge).
+    This is what lets :func:`_draw_label_on_segment` size its horizontal
+    search window to the row's *real* available space instead of the
+    width of whichever jog segment the label's own edge happens to travel
+    through. At a labeled junction where several edges converge/diverge on
+    one node, each edge's own Z/C-path jog can be just a few cells long
+    (its exit/entry columns sit close together), far shorter than its
+    label's text, while the row itself — blank across the whole inter-rank
+    gap or side lane by construction — has far more room than that one
+    edge's own short segment implies. Sizing the search window to the
+    row's real clear span keeps a label wider than its own segment from
+    overflowing straight through a sibling's already-placed label or line
+    (fused text, or text flush against a connector) or landing flush
+    against a box border with no separating cell (a label fused to the
+    node's own text).
+
+    Prefers a full blank-column buffer against a genuinely blocked
+    neighbor (not merely "don't overwrite it") when the crowd leaves room
+    to spare for one — a label read flush against a passing connector
+    line (``│closed│``, no separating cell) is exactly as unreadable as
+    one fused to a box border, so "blocked" alone isn't a strict enough
+    stopping rule on its own. Falls back to the tighter touching span only
+    when the crowd leaves no spare room at all, rather than shrinking the
+    window below what the label itself needs.
+    """
+    left = near_x
+    steps = 0
+    while left > 0 and not blocked(left - 1, row) and steps < _LABEL_SCAN_CAP:
+        left -= 1
+        steps += 1
+    left_blocked = left > 0 and blocked(left - 1, row)
+    right = near_x
+    steps = 0
+    while not blocked(right + 1, row) and steps < _LABEL_SCAN_CAP:
+        right += 1
+        steps += 1
+    right_blocked = blocked(right + 1, row)
+    # left/right are each already the touching boundary (adjacent to
+    # whichever blocked cell stopped the scan, zero gap): shifting each
+    # one exactly one more cell out gives the buffered boundary. The shift
+    # is applied only here, once, so the buffer stays exactly one cell —
+    # the search window a tightly fitting label needs is the touching
+    # span widened by one, no more.
+    buffered_left = left + 1 if left_blocked else left
+    buffered_right = right - 1 if right_blocked else right
+    if buffered_left <= buffered_right:
+        return buffered_left, buffered_right
+    return left, right
+
+
 def _draw_label_on_segment(
-    canvas: Canvas, a: tuple[int, int], b: tuple[int, int], label: str
+    canvas: Canvas,
+    a: tuple[int, int],
+    b: tuple[int, int],
+    label: str,
+    path_ends: tuple[tuple[int, int], tuple[int, int]] | None = None,
 ) -> None:
     """Center ``label`` on the straight run ``a``-``b``. A label always
     *reads* horizontally (measured with :func:`visual_len`): on a
     horizontal segment it centers along the segment's own x-span at the
-    segment's row; on a vertical segment (e.g. a back-edge's side lane) it
-    still reads horizontally, centered on the segment's column, at a row
-    chosen from the segment's y-span — matching the sequence renderer's
-    self-loop label placement. Shifts along the search axis to the nearest
-    span/row fully clear of a reserved (box) cell; if none exists, writes
-    at the ideal placement anyway (overflow tolerated) but skips individual
-    reserved cells — a label never corrupts a box. Every written label cell
-    is itself marked reserved (see :func:`layout_flowgraph`'s two-pass draw
+    segment's row — but the *search window* for where along that row it
+    may land is the row's real clear span (:func:`_row_clear_span`), not
+    the segment's own two endpoints, since a short jog can be much
+    narrower than its label's text (see that function's docstring); on a
+    vertical segment (e.g. a back-edge's side lane) it still reads
+    horizontally, centered on the segment's column, at a row chosen from
+    the segment's y-span — matching the sequence renderer's self-loop
+    label placement. Shifts along the search axis to the nearest span/row
+    fully clear of a blocked cell — a box, a subgraph frame title, an
+    already-placed label, or a sibling edge's already-drawn connector line
+    (see :func:`_cell_blocks_label`); the label's own edge's own line is
+    exempted (:func:`_segment_cells`), since overwriting it is the whole
+    point of labeling it. If no clear run exists, writes at the ideal
+    placement anyway (overflow tolerated) but skips individual reserved
+    cells — a label never corrupts a box. Every written label cell is
+    itself marked reserved (see :func:`layout_flowgraph`'s two-pass draw
     order): labels draw only after every edge's line+arrowheads are already
     on the canvas, so nothing draws over a label afterwards, and a *later*
     label's own clear-run search treats an earlier label's cells the same
     as a box's — skip, don't overwrite.
+
+    ``path_ends`` (the labeled edge's overall first and last point, i.e.
+    ``points[0]``/``points[-1]`` of its full routed path, not just this one
+    segment's own two endpoints) tells the endpoint-buffer treatment below
+    which of ``a``/``b`` — if either — is a genuine interior bend rather
+    than the edge's own exit/entry anchor. An anchor is where an arrowhead
+    lands (or a source marker sits), and the "label▶"/"◀label" convention
+    specifically wants a label flush against *that*; only a mid-path
+    corner, where the line turns but doesn't terminate, reads as fused
+    when a label butts against it with no separating cell.
     """
     length = visual_len(label)
     if length <= 0:
         return
     (x0, y0), (x1, y1) = a, b
+    # Two predicates, not one, because a segment's own two endpoints play
+    # two different roles. ``loose`` (every cell of the segment, corners
+    # included, exempt) is what the *scan* — measuring how far the row's
+    # real clear space actually reaches — must use: on a Z/C-path jog
+    # segment those endpoints are the path's own right-angle bends into a
+    # perpendicular leg, not a real wall, so a scan that stopped there
+    # would under-measure the row's true available room whenever the jog
+    # itself is short (the very case this whole mechanism exists for).
+    # ``strict`` is what *placement* prefers: it additionally treats a
+    # small buffer zone hugging each endpoint (the corner cell itself plus
+    # its immediate left/right neighbor on the same row) as blocked,
+    # regardless of which side of the corner a candidate run approaches
+    # from — a label run landing exactly flush against its own bend, with
+    # no separating cell, reads exactly as fused as landing flush against
+    # a foreign line, even though the glyph belongs to the same edge,
+    # so "one cell short of the corner" isn't enough either; the
+    # placement search needs a real gap on both possible sides. Try strict
+    # first — it wins whenever the (loose-measured) window has room to
+    # spare for the buffer — and only fall back to loose when the window
+    # is so tight the label needs every last cell, corners included.
+    # An endpoint that is also the edge's own overall exit/entry anchor
+    # (see ``path_ends``) is excluded from this buffer entirely — it is
+    # where an arrowhead lands, not a mid-path bend, and "label▶" flush
+    # against it is the normal, wanted look, not a fused-looking defect.
+    own_cells = _segment_cells(a, b)
+    bend_corners = (a, b) if path_ends is None else tuple(
+        p for p in (a, b) if p not in path_ends
+    )
+    endpoint_buffer = frozenset(
+        (cx + dx, cy) for cx, cy in bend_corners for dx in (-1, 0, 1)
+    )
+
+    def loose_blocked(x: int, y: int) -> bool:
+        return _cell_blocks_label(canvas, x, y, own_cells)
+
+    def strict_blocked(x: int, y: int) -> bool:
+        if (x, y) in endpoint_buffer:
+            return True
+        return _cell_blocks_label(canvas, x, y, own_cells)
 
     if y0 == y1:
-        # Horizontal segment: search along x for a clear run at row y0.
-        lo, hi = (x0, x1) if x0 <= x1 else (x1, x0)
+        # Horizontal segment: search along x for a clear run at row y0,
+        # widened to the row's real clear span (see _row_clear_span).
+        seg_lo, seg_hi = (x0, x1) if x0 <= x1 else (x1, x0)
         row = y0
-        center = (lo + hi) // 2
+        center = (seg_lo + seg_hi) // 2
+        lo, hi = _row_clear_span(row, center, loose_blocked)
+        # strict's search window matches the widened [lo, hi] only when
+        # *both* of this segment's endpoints are genuine interior bends
+        # (see path_ends above) — that's the case the widening exists for
+        # (Problem 1: a short jog far shorter than its own label, needing
+        # the row's real floor space to find a bend-avoiding spot at all).
+        # When either endpoint is instead the edge's own exit/entry anchor,
+        # widening strict's search the same way lets it wander away from
+        # that anchor into unrelated floor space back toward the segment's
+        # far end — wrong specifically because that anchor (an arrowhead,
+        # typically) is exactly what the label should stay adjacent to,
+        # so strict is scoped to the segment's own natural extent there
+        # instead; loose always keeps the full widened window regardless,
+        # since it's the fallback tier that exists to use that extra room.
+        if len(bend_corners) == 2:
+            strict_lo, strict_hi = lo, hi
+        else:
+            strict_lo, strict_hi = max(lo, seg_lo), min(hi, seg_hi)
 
         def cells(start: int) -> list[tuple[int, int]]:
             return [(start + i, row) for i in range(length)]
 
-        for start in _label_positions(length, center, lo, hi):
-            run = cells(start)
-            if not any(canvas.is_reserved(x, y) for x, y in run):
-                _write_label_run(canvas, start, row, label, check_reserved=False)
-                _reserve_label_margin(canvas, start - 1, row)
-                _reserve_label_margin(canvas, start + length, row)
-                return
+        for check, w_lo, w_hi in (
+            (strict_blocked, strict_lo, strict_hi),
+            (loose_blocked, lo, hi),
+        ):
+            for start in _label_positions(length, center, w_lo, w_hi):
+                run = cells(start)
+                if not any(check(x, y) for x, y in run):
+                    _write_label_run(canvas, start, row, label, check_reserved=False)
+                    _reserve_label_margin(canvas, start - 1, row)
+                    _reserve_label_margin(canvas, start + length, row)
+                    return
         start = max(lo, min(center - length // 2, hi - length + 1))
         _write_label_run(canvas, start, row, label, check_reserved=True)
         return
 
     # Vertical segment: the label still reads horizontally, centered on
-    # column x0; search along y for a row whose horizontal run is clear.
+    # column x0 — unlike the horizontal branch, the column never shifts;
+    # only which *row* it lands on is searched, so the label always stays
+    # visually anchored beside the vertical line it labels (e.g. flush
+    # after an LR forward edge's arrowhead) instead of sliding sideways
+    # into whatever row happens to have the most open floor space. The
+    # row search never strays outside the segment's own [lo, hi] y-span:
+    # a row off that span isn't even on this edge's own path, so a
+    # crowded column (every candidate row blocked by some sibling edge's
+    # crossing line) falls through to the best-effort pick below instead
+    # of wandering into blank rows elsewhere on the canvas, possibly far
+    # below the whole diagram.
     lo, hi = (y0, y1) if y0 <= y1 else (y1, y0)
     col = x0
-    # Clamp rather than let the run go negative: a negative x is simply
-    # unaddressable (Canvas has no left margin to grow into), which would
-    # silently drop the label's leading characters instead of overflowing
-    # visibly to the right like every other overflow case in this module.
     start_x = max(0, col - length // 2)
 
     def row_cells(row: int) -> list[tuple[int, int]]:
         return [(start_x + i, row) for i in range(length)]
 
     center_row = (lo + hi) // 2
-    for row in _label_positions(1, center_row, lo, hi):
-        run = row_cells(row)
-        if not any(canvas.is_reserved(x, y) for x, y in run):
-            _write_label_run(canvas, start_x, row, label, check_reserved=False)
-            _reserve_label_margin(canvas, start_x - 1, row)
-            _reserve_label_margin(canvas, start_x + length, row)
-            return
-    _write_label_run(canvas, start_x, center_row, label, check_reserved=True)
+    candidates = _label_positions(1, center_row, lo, hi)
+    for check in (strict_blocked, loose_blocked):
+        for row in candidates:
+            run = row_cells(row)
+            if not any(check(x, y) for x, y in run):
+                _write_label_run(canvas, start_x, row, label, check_reserved=False)
+                _reserve_label_margin(canvas, start_x - 1, row)
+                _reserve_label_margin(canvas, start_x + length, row)
+                return
+    # No row within the segment's own span was fully clear even under the
+    # loose check — pick whichever row has the fewest blocked cells
+    # (best effort) and write there, skipping only genuinely reserved
+    # cells, rather than overflowing past the segment's own span into
+    # unrelated territory below/above the whole diagram.
+    best_row = min(
+        candidates,
+        key=lambda row: sum(1 for x, y in row_cells(row) if loose_blocked(x, y)),
+    )
+    _write_label_run(canvas, start_x, best_row, label, check_reserved=True)
 
 
 def _draw_polyline(canvas: Canvas, points: list[tuple[int, int]], style: EdgeStyle) -> None:
@@ -1910,6 +2233,7 @@ def _route_edge_path(
     self_loop_counter: dict[str, int],
     exit_anchor: tuple[int, int] | None = None,
     entry_anchor: tuple[int, int] | None = None,
+    mid_p: int | None = None,
 ) -> list[tuple[int, int]] | None:
     """Compute one edge's polyline points: anchors chosen by relative rank
     position, an L/Z/C path shape. Pure path computation only — drawing is
@@ -1925,8 +2249,12 @@ def _route_edge_path(
     :func:`_lane_anchor` — used only when this edge's exit/entry side is
     shared with a sibling edge that also carries an arrow marker on that
     same end; ``None`` (the overwhelming common case, for either) reproduces
-    the original single-anchor behavior exactly on that end. Same-rank
-    edges and self-loops ignore both (see :func:`_allocate_edge_anchors`'s
+    the original single-anchor behavior exactly on that end. ``mid_p``
+    (from :func:`_forward_row_overrides`), forwarded only on the
+    ``"forward"`` branch, gives this edge's own jog row/column instead of
+    :func:`_z_path`'s shared-band default — used when this edge's inter-
+    rank band is shared with 2+ sibling labeled edges. Same-rank edges and
+    self-loops ignore all three (see :func:`_allocate_edge_anchors`'s
     docstring for why).
     """
     src_rect = rects.get(edge.src)
@@ -1947,7 +2275,7 @@ def _route_edge_path(
     if kind == "forward":
         exit_pt = exit_anchor if exit_anchor is not None else _forward_exit(direction, src_rect)
         entry_pt = entry_anchor if entry_anchor is not None else _forward_entry(direction, dst_rect)
-        return _z_path(direction, exit_pt, entry_pt)
+        return _z_path(direction, exit_pt, entry_pt, mid_p=mid_p)
 
     lane = lane_counter[0]
     lane_counter[0] += 1
@@ -2030,15 +2358,16 @@ def layout_flowgraph(g: FlowGraph, width: int) -> list[str]:
         # Two passes across *all* edges, not one pass per edge: every
         # edge's line + arrowheads draw first, then every edge's label
         # draws last (see design doc). Interleaving line-then-label per
-        # edge (the old order) let a later edge's line silently erase an
-        # earlier edge's already-placed label whenever their paths shared
-        # a cell — labels are only ever safe once no more lines are coming.
+        # edge would let a later edge's line silently erase an earlier
+        # edge's already-placed label whenever their paths shared a cell —
+        # labels are only ever safe once no more lines are coming.
         lane_counter = [0]
         self_loop_counter: dict[str, int] = {}
         exit_overrides, entry_overrides = _allocate_edge_anchors(
             rects, g.direction, g.edges, g.nodes
         )
-        edge_paths: list[tuple[FlowEdge, list[tuple[int, int]]]] = []
+        row_overrides = _forward_row_overrides(rects, g.direction, g.edges)
+        edge_paths: list[tuple[int, FlowEdge, list[tuple[int, int]]]] = []
         for i, e in enumerate(g.edges):
             points = _route_edge_path(
                 rects,
@@ -2048,17 +2377,35 @@ def layout_flowgraph(g: FlowGraph, width: int) -> list[str]:
                 self_loop_counter,
                 exit_overrides.get(i),
                 entry_overrides.get(i),
+                row_overrides.get(i),
             )
             if points is not None:
-                edge_paths.append((e, points))
-        for e, points in edge_paths:
+                edge_paths.append((i, e, points))
+        for _i, e, points in edge_paths:
             _draw_polyline(canvas, points, e.style)
             _draw_arrowheads(canvas, points, e)
-        for e, points in edge_paths:
-            if e.label:
+        for i, e, points in edge_paths:
+            if not e.label:
+                continue
+            # A row-stacked forward edge (see _forward_row_overrides) was
+            # given its own dedicated jog row specifically so its label
+            # would land there — but _longest_segment picks by raw length,
+            # and the z-path's *exit* leg (rank-axis run from the box out
+            # to the jog row) can measure longer than the jog itself once
+            # the jog is pushed toward one end of a widened, multi-edge
+            # band, which would silently defeat the whole point of
+            # stacking. Skip the length comparison for these edges and
+            # address the jog segment (points[1]-points[2] of _z_path's
+            # 4-point staircase) directly; every other edge keeps today's
+            # longest-run selection unchanged.
+            if i in row_overrides and len(points) == 4:
+                seg = (points[1], points[2])
+            else:
                 seg = _longest_segment(points)
-                if seg is not None:
-                    _draw_label_on_segment(canvas, *seg, e.label)
+            if seg is not None:
+                _draw_label_on_segment(
+                    canvas, *seg, e.label, path_ends=(points[0], points[-1])
+                )
         return canvas.to_lines()
     except Exception:
         return []

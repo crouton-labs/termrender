@@ -373,6 +373,51 @@ def test_note_on_undeclared_state_still_registers_that_state():
 
 
 # --------------------------------------------------------------------------
+# Label-collision regression: crowded fan-out/fan-in around one state
+# --------------------------------------------------------------------------
+
+
+def test_adversarial_fan_out_fan_in_labels_all_survive_uncollided():
+    # Five labeled transitions all cross the Working<->{Waiting,Dormant,[*]}
+    # band — three forward (Working fanning out) and two back
+    # (Waiting/Dormant returning to Working). Each of the five must land
+    # its own jog row so its label survives distinct and unfused: none may
+    # vanish (the character-by-character reserved-cell fallback silently
+    # drops a label when every candidate cell conflicts) and none may fuse
+    # onto Working's own border/name (e.g. "Working ◄inbox message").
+    source = (
+        "stateDiagram-v2\n"
+        "    [*] --> Spawned\n"
+        "    Spawned --> Working\n"
+        "    Working --> Waiting: blocked on event\n"
+        "    Waiting --> Working: wake\n"
+        "    Working --> Dormant: turn ends\n"
+        "    Dormant --> Working: inbox message\n"
+        "    Working --> [*]: closed\n"
+    )
+    lines = render_state(source, width=100)
+    text = "\n".join(lines)
+    labels = ["blocked on event", "wake", "turn ends", "inbox message", "closed"]
+    for label in labels:
+        assert text.count(label) == 1, f"{label!r} must appear exactly once: {lines!r}"
+
+    # None fused onto a state's own name row (the literal defect this
+    # closes: a label reading as part of the box's own border/name line).
+    for label in labels:
+        row = _row_of(lines, label)
+        for name in ("Spawned", "Working", "Waiting", "Dormant"):
+            assert name not in lines[row], (
+                f"{label!r} landed on {name}'s own row: {lines[row]!r}"
+            )
+
+    # None detached below the whole diagram body.
+    last_box_row = max(i for i, line in enumerate(lines) if _BOX_GLYPH_RE.search(line))
+    for label in labels:
+        row = _row_of(lines, label)
+        assert row <= last_box_row, f"{label!r} detached below the diagram: {lines!r}"
+
+
+# --------------------------------------------------------------------------
 # Direction
 # --------------------------------------------------------------------------
 

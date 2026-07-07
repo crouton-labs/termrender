@@ -537,3 +537,52 @@ def test_cjk_edge_label_has_no_connector_bleed_inside_its_width():
         f"{label_row!r}"
     )
     assert label_row.strip() == "\u4f60\u597d"
+
+
+# --------------------------------------------------------------------------
+# Multiple labeled edges converging/diverging on one node (engine-level
+# regression, proven via FlowGraph/layout_flowgraph directly rather than
+# through a stateDiagram-specific harness — see test_mermaid_state.py's
+# adversarial regression for the same class of defect through the CLI path)
+# --------------------------------------------------------------------------
+
+
+def test_multiple_labeled_edges_diverge_and_converge_on_one_node():
+    # Hub fans out to three neighbors (three forward edges sharing Hub's
+    # exit band) and two of them route a labeled edge straight back into
+    # Hub (two back-edges sharing Hub's lane side) — five labeled edges
+    # all landing anchors/jog-rows on or through the same node. Every edge
+    # crossing the identical inter-rank band must get its own jog row so
+    # its label survives distinct and unfused, rather than every edge
+    # sharing one jog row and labels fusing or silently dropping whenever
+    # every candidate cell conflicts.
+    g = FlowGraph(
+        direction=Direction.TB,
+        nodes=[_node("Hub"), _node("Left"), _node("Right"), _node("Down")],
+        edges=[
+            _edge("Hub", "Left", label="go left"),
+            _edge("Hub", "Right", label="go right"),
+            _edge("Hub", "Down", label="descend"),
+            _edge("Left", "Hub", label="return left"),
+            _edge("Right", "Hub", label="return right"),
+        ],
+    )
+    lines = layout_flowgraph(g, width=100)
+    text = "\n".join(lines)
+    labels = ["go left", "go right", "descend", "return left", "return right"]
+    for label in labels:
+        assert text.count(label) == 1, f"{label!r} must appear exactly once: {lines!r}"
+
+    # None fused onto a node's own name row.
+    for label in labels:
+        row = _row_of(lines, label)
+        for name in ("Hub", "Left", "Right", "Down"):
+            assert name not in lines[row], (
+                f"{label!r} landed on {name}'s own row: {lines[row]!r}"
+            )
+
+    # None detached below the whole diagram body.
+    last_box_row = max(i for i, line in enumerate(lines) if _BOX_GLYPH_RE.search(line))
+    for label in labels:
+        row = _row_of(lines, label)
+        assert row <= last_box_row, f"{label!r} detached below the diagram: {lines!r}"
