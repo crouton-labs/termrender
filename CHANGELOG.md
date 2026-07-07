@@ -1,6 +1,42 @@
 # CHANGELOG
 
 
+## v4.8.0 (2026-07-07)
+
+### Features
+
+- Native mermaid stateDiagram renderer on the flowchart engine
+  ([`ff4fa87`](https://github.com/crouton-labs/termrender/commit/ff4fa87d275d0e18f64e386c16e13e237ad99923))
+
+Adds src/termrender/renderers/mermaid_state.py exposing render_state(source, width) -> list[str] as
+  a thin adapter: parses stateDiagram/stateDiagram-v2 grammar into the existing flowchart engine's
+  own FlowGraph/FlowNode/FlowEdge/Subgraph model and renders through layout_flowgraph directly
+  (grandalf layout, box rasterizer, orthogonal router, subgraph frames), reusing that engine's
+  degradation contract unchanged.
+
+Covers: A --> B / A --> B : event transitions; [*] as per-scope start/end pseudo-states (distinct
+  compact glyph markers, shared across every [*] reference in one scope); state "Long name" as s1
+  aliases; state X { ... } composite states as nested subgraph frames (a composite referenced
+  directly by an external transition gets its own proxy box, since the engine has no edge-to-frame
+  anchor); <<choice>> as a diamond, <<fork>>/<<join>> degrading to the engine's plain small rect;
+  direction LR/TD/RL/BT; note left/right of X (inline and multi-line note/end note forms) attached
+  via a headless dotted edge so text is never dropped; %% comments skipped anywhere including inside
+  note blocks; -- / --- concurrency separators flattened.
+
+Unwired: not imported by mermaid.py's dispatcher (later phase). Only touches new files; the
+  flowchart engine files remain untouched (read-only, per a concurrent sibling's ownership).
+
+tests/test_mermaid_state.py: 24 tests asserting real topology/geometry (row/column ordering, frame
+  containment, distinct start/end glyphs, diamond-shape glyphs, label text) across a simple
+  start/end machine, labeled transitions, aliases, choice/fork/join, composite + nested composite
+  states, inline/multi-line notes, direction LR, comments, and the degradation contract
+  (header-missing, zero-node, and crash-guard echo paths, each pinned to the same three-condition
+  rule the flowchart engine's own tests already establish — best-effort recoverable body-level
+  glitches, like a stray '}' or an unterminated composite/note, render real content rather than
+  forcing an echo, matching mermaid_flow_parser.py's documented 'auto-closed rather than dropped' /
+  'consumed silently, best-effort' policy).
+
+
 ## v4.7.0 (2026-07-07)
 
 ### Features
