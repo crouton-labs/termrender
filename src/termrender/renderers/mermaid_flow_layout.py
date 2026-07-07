@@ -1775,14 +1775,68 @@ def _lane_path(
     ]
 
 
-def _lane_secondary_base(direction: Direction, a: BoxRect, b: BoxRect) -> int:
-    """Starting side-lane coordinate just past the two involved boxes' far
-    edge on the off-axis — the base that :func:`_route_edge` adds
-    ``_LANE_MARGIN + lane * _LANE_GAP`` to, per back-edge, to avoid stacking
-    lanes."""
+def _lane_offsets(
+    rects: dict[str, BoxRect], direction: Direction, edges: list[FlowEdge]
+) -> dict[int, int]:
+    """Per-back-edge lane-column offset (added atop :func:`_lane_secondary_base`),
+    one entry per index into ``edges`` — every back-edge gets an entry, in
+    ``edges``' own encounter order, the same order a plain incrementing
+    counter would have assigned lanes.
+
+    Consecutive lanes step apart by ``_LANE_GAP`` by default, but the step
+    widens when either edge of the pair carries a label wide enough that
+    its centered text (see :func:`_draw_label_on_segment`'s vertical
+    branch, which centers a lane label on its own lane column) would
+    otherwise reach across the gap into the neighboring lane's column with
+    no buffer cell left between the two — the vertical-segment analogue of
+    :func:`_rank_gap_overrides` widening a rank gap for a labeled forward
+    edge's own text. Two back-edges with no labels at all (or labels short
+    enough to fit in the default gap) reproduce the original fixed-step
+    spacing exactly.
+    """
+    offsets: dict[int, int] = {}
+    prev_half = 0
+    total = 0
+    seen_any = False
+    for i, e in enumerate(edges):
+        if e.src == e.dst:
+            continue
+        if _classify_edge(rects, direction, e) != "back":
+            continue
+        half = visual_len(e.label) // 2 + 1 if e.label else 0
+        if seen_any:
+            total += max(_LANE_GAP, prev_half + half + 1)
+        offsets[i] = total
+        prev_half = half
+        seen_any = True
+    return offsets
+
+
+def _lane_secondary_base(direction: Direction, rects: dict[str, BoxRect]) -> int:
+    """Starting side-lane coordinate just past *every* placed node's far
+    edge on the off-axis — the base that :func:`_route_edge_path` adds
+    ``_LANE_MARGIN + lane_offset`` (see :func:`_lane_offsets`) to, per
+    back-edge, to avoid stacking lanes.
+
+    Scoped to the whole graph's rects, not just the one back-edge's own
+    ``src``/``dst`` boxes: a back-edge's C-path runs its exit/entry legs
+    along its own src/dst boxes' own rank-band rows (the off-axis-*rank*
+    coordinate — the primary axis here is the off-axis, not the rank axis;
+    see :func:`_abstract`), which any sibling node sharing that same band
+    (every other node in the same rank) also occupies. Basing the lane on
+    only the edge's own two boxes leaves the lane column short of a wider
+    sibling in that rank, so the C-path's own corner would land inside —
+    or its legs would sweep across — that sibling's box. Since every
+    back-edge already shares one global lane-offset sequence (see
+    :func:`_lane_offsets`, stacking lanes across the *whole* diagram, not
+    per edge pair), reaching past the whole diagram's own far edge here is
+    the same scope the stacking mechanism already assumes, not a new
+    one."""
+    if not rects:
+        return 0
     if _rank_is_horizontal(direction):
-        return max(a.y + a.h - 1, b.y + b.h - 1)
-    return max(a.x + a.w - 1, b.x + b.w - 1)
+        return max(r.y + r.h - 1 for r in rects.values())
+    return max(r.x + r.w - 1 for r in rects.values())
 
 
 def _segment_length(a: tuple[int, int], b: tuple[int, int]) -> int:
@@ -2156,16 +2210,37 @@ def _draw_label_on_segment(
     def row_cells(row: int) -> list[tuple[int, int]]:
         return [(start_x + i, row) for i in range(length)]
 
+    def buffered_row_cells(row: int) -> list[tuple[int, int]]:
+        # The label's own cells plus one buffer cell each side — the same
+        # "don't butt flush against a foreign line" discipline the
+        # horizontal branch gets for free from _row_clear_span's buffered
+        # window (see that function's docstring): two back-edges' lane
+        # columns can sit only _LANE_GAP cells apart, close enough that an
+        # unbuffered row search would happily land one label's edge
+        # directly against the neighboring lane's connector line.
+        return [(start_x - 1, row), *row_cells(row), (start_x + length, row)]
+
+    def find_row(cells_fn: Callable[[int], list[tuple[int, int]]]) -> int | None:
+        for check in (strict_blocked, loose_blocked):
+            for row in candidates:
+                if not any(check(x, y) for x, y in cells_fn(row)):
+                    return row
+        return None
+
     center_row = (lo + hi) // 2
     candidates = _label_positions(1, center_row, lo, hi)
-    for check in (strict_blocked, loose_blocked):
-        for row in candidates:
-            run = row_cells(row)
-            if not any(check(x, y) for x, y in run):
-                _write_label_run(canvas, start_x, row, label, check_reserved=False)
-                _reserve_label_margin(canvas, start_x - 1, row)
-                _reserve_label_margin(canvas, start_x + length, row)
-                return
+    # Prefer a row with the buffer cells clear too; fall back to a row
+    # that's merely not overlapping the label's own cells when the column
+    # is crowded enough that no row has buffer room to spare — mirrors
+    # _row_clear_span's own buffered-vs-touching fallback.
+    row = find_row(buffered_row_cells)
+    if row is None:
+        row = find_row(row_cells)
+    if row is not None:
+        _write_label_run(canvas, start_x, row, label, check_reserved=False)
+        _reserve_label_margin(canvas, start_x - 1, row)
+        _reserve_label_margin(canvas, start_x + length, row)
+        return
     # No row within the segment's own span was fully clear even under the
     # loose check — pick whichever row has the fewest blocked cells
     # (best effort) and write there, skipping only genuinely reserved
@@ -2229,11 +2304,11 @@ def _route_edge_path(
     rects: dict[str, BoxRect],
     direction: Direction,
     edge: FlowEdge,
-    lane_counter: list[int],
     self_loop_counter: dict[str, int],
     exit_anchor: tuple[int, int] | None = None,
     entry_anchor: tuple[int, int] | None = None,
     mid_p: int | None = None,
+    lane_offset: int = 0,
 ) -> list[tuple[int, int]] | None:
     """Compute one edge's polyline points: anchors chosen by relative rank
     position, an L/Z/C path shape. Pure path computation only — drawing is
@@ -2253,9 +2328,12 @@ def _route_edge_path(
     (from :func:`_forward_row_overrides`), forwarded only on the
     ``"forward"`` branch, gives this edge's own jog row/column instead of
     :func:`_z_path`'s shared-band default — used when this edge's inter-
-    rank band is shared with 2+ sibling labeled edges. Same-rank edges and
-    self-loops ignore all three (see :func:`_allocate_edge_anchors`'s
-    docstring for why).
+    rank band is shared with 2+ sibling labeled edges. ``lane_offset``
+    (from :func:`_lane_offsets`), used only on the back-edge branch, gives
+    this edge's own lane-column offset instead of a plain per-edge
+    increment — spacing stacked back-edge lanes apart by label width, not
+    just a fixed step. Same-rank edges and self-loops ignore all four (see
+    :func:`_allocate_edge_anchors`'s docstring for why).
     """
     src_rect = rects.get(edge.src)
     dst_rect = rects.get(edge.dst)
@@ -2277,13 +2355,7 @@ def _route_edge_path(
         entry_pt = entry_anchor if entry_anchor is not None else _forward_entry(direction, dst_rect)
         return _z_path(direction, exit_pt, entry_pt, mid_p=mid_p)
 
-    lane = lane_counter[0]
-    lane_counter[0] += 1
-    lane_secondary = (
-        _lane_secondary_base(direction, src_rect, dst_rect)
-        + _LANE_MARGIN
-        + lane * _LANE_GAP
-    )
+    lane_secondary = _lane_secondary_base(direction, rects) + _LANE_MARGIN + lane_offset
     exit_pt = exit_anchor if exit_anchor is not None else _lane_anchor(direction, src_rect)
     entry_pt = entry_anchor if entry_anchor is not None else _lane_anchor(direction, dst_rect)
     return _lane_path(direction, exit_pt, entry_pt, lane_secondary)
@@ -2361,23 +2433,23 @@ def layout_flowgraph(g: FlowGraph, width: int) -> list[str]:
         # edge would let a later edge's line silently erase an earlier
         # edge's already-placed label whenever their paths shared a cell —
         # labels are only ever safe once no more lines are coming.
-        lane_counter = [0]
         self_loop_counter: dict[str, int] = {}
         exit_overrides, entry_overrides = _allocate_edge_anchors(
             rects, g.direction, g.edges, g.nodes
         )
         row_overrides = _forward_row_overrides(rects, g.direction, g.edges)
+        lane_offsets = _lane_offsets(rects, g.direction, g.edges)
         edge_paths: list[tuple[int, FlowEdge, list[tuple[int, int]]]] = []
         for i, e in enumerate(g.edges):
             points = _route_edge_path(
                 rects,
                 g.direction,
                 e,
-                lane_counter,
                 self_loop_counter,
                 exit_overrides.get(i),
                 entry_overrides.get(i),
                 row_overrides.get(i),
+                lane_offsets.get(i, 0),
             )
             if points is not None:
                 edge_paths.append((i, e, points))
@@ -2398,7 +2470,25 @@ def layout_flowgraph(g: FlowGraph, width: int) -> list[str]:
             # address the jog segment (points[1]-points[2] of _z_path's
             # 4-point staircase) directly; every other edge keeps today's
             # longest-run selection unchanged.
+            #
+            # A back-edge's C-path (see _lane_path) gets the identical
+            # treatment for a different reason: its exit/entry legs travel
+            # along its own src/dst boxes' rank-band rows, which every
+            # sibling node sharing that band also occupies, so a crowded
+            # rank can make one of those legs measure longer than the
+            # lane's own dedicated middle segment even though the legs
+            # aren't genuinely open floor space the way the lane column is
+            # (the lane sits past every node's own far edge — see
+            # _lane_secondary_base). Raw-length comparison would then pick
+            # a leg that merely *looks* long on paper, landing the label
+            # beside — or on top of — whichever sibling boxes that leg
+            # happens to run alongside. The lane's own middle segment is
+            # always the one guaranteed clear of every node in the graph,
+            # so a back-edge always addresses it directly, the same way a
+            # row-stacked forward edge always addresses its own jog row.
             if i in row_overrides and len(points) == 4:
+                seg = (points[1], points[2])
+            elif len(points) == 4 and _classify_edge(rects, g.direction, e) == "back":
                 seg = (points[1], points[2])
             else:
                 seg = _longest_segment(points)

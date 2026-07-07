@@ -586,3 +586,54 @@ def test_multiple_labeled_edges_diverge_and_converge_on_one_node():
     for label in labels:
         row = _row_of(lines, label)
         assert row <= last_box_row, f"{label!r} detached below the diagram: {lines!r}"
+
+
+# --------------------------------------------------------------------------
+# Back-edge return leg crossing sibling boxes in the source's own crowded
+# rank (regression: a back-edge's C-path lane column was sized from just
+# its own two endpoints, not every node in the graph, so its horizontal
+# exit leg — which travels along the source's own rank row, a row every
+# rank-mate box also occupies — could run alongside, and its label land
+# inside, whichever sibling boxes sat between the source and the lane)
+# --------------------------------------------------------------------------
+
+
+def test_back_edge_return_leg_clears_source_rank_siblings():
+    # Hub fans out to six children sharing one rank; only Alpha (the
+    # leftmost, so every sibling sits to its right) routes a labeled edge
+    # back into Hub. The back-edge's lane column must clear every sibling
+    # in Alpha's rank, not just Alpha and Hub themselves.
+    child_ids = ["Alpha", "Beta", "Cee", "Dee", "Eee", "Eff"]
+    g = FlowGraph(
+        direction=Direction.TB,
+        nodes=[_node("Hub")] + [_node(c) for c in child_ids],
+        edges=[_edge("Hub", c) for c in child_ids] + [_edge("Alpha", "Hub", label="returns")],
+    )
+    lines = layout_flowgraph(g, width=100)
+    text = "\n".join(lines)
+    assert text.count("returns") == 1, f"'returns' must appear exactly once: {lines!r}"
+
+    from termrender.renderers.mermaid_flow_layout import _node_subgraph_map, _place_nodes
+
+    rects = _place_nodes(g.nodes, g.edges, g.direction, _node_subgraph_map([]))
+    label_cells: set[tuple[int, int]] = set()
+    for r, line in enumerate(lines):
+        c = line.find("returns")
+        if c != -1:
+            label_cells.update((c + i, r) for i in range(len("returns")))
+    assert label_cells, f"expected to find 'returns' in the rendered output: {lines!r}"
+
+    for node_id, rect in rects.items():
+        cells = _interior_cells(rect)
+        overlap = label_cells & cells
+        assert not overlap, f"'returns' label overlaps {node_id}'s box at {overlap}: {lines!r}"
+
+    # Every sibling name must survive intact, not fused into one run-together
+    # line with the back-edge's label (the literal defect: "BetareturnsCee").
+    for name in ["Hub"] + child_ids:
+        assert name in text
+    for r, line in enumerate(lines):
+        if "returns" in line:
+            assert "Beta" not in line and "Cee" not in line, (
+                f"'returns' fused onto a sibling box's row: {line!r}"
+            )

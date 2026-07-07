@@ -417,3 +417,67 @@ def test_render_class_never_raises_on_garbage():
     for garbage in ("", "\n\n\n", "classDiagram\nclass {{{\n", "classDiagram\n}}}}\n"):
         # Must not raise.
         render_class(garbage, 80)
+
+
+# --------------------------------------------------------------------------
+# Back-edge label crossing sibling boxes (regression: a back-edge's C-path
+# routed its lane column just past its own two endpoints' extent, not past
+# every node in the diagram, so its horizontal exit leg — which travels
+# along its source's own rank row, a row every rank-mate box also occupies
+# — ran alongside (and its label landed inside) whichever sibling boxes sat
+# between the source and the lane column)
+# --------------------------------------------------------------------------
+
+
+def test_back_edge_label_does_not_cross_sibling_boxes():
+    # Hub fans out to six children; Alpha alone routes a labeled edge back
+    # into Hub. Alpha's rank has five siblings (Beta..Eff) to its right —
+    # exactly the crowded-rank shape that let the back-edge's return leg
+    # run straight through Beta's and Cee's box interiors.
+    src = (
+        "classDiagram\n"
+        "    Hub --> Alpha : extends\n"
+        "    Hub --> Beta : has\n"
+        "    Hub --> Cee : owns\n"
+        "    Hub --> Dee : uses\n"
+        "    Hub --> Eee : likes\n"
+        "    Hub --> Eff : needs\n"
+        "    Alpha --> Hub : returns\n"
+    )
+    lines = _lines(src, width=100)
+    text = "\n".join(lines)
+    assert text.count("returns") == 1, f"'returns' must appear exactly once: {lines!r}"
+
+    from termrender.renderers.mermaid_class import _build_graph
+    from termrender.renderers import mermaid_flow_layout as fl
+
+    graph = _build_graph(src)
+    node_subgraph = fl._node_subgraph_map(graph.subgraphs)
+    rects = fl._place_nodes(graph.nodes, graph.edges, graph.direction, node_subgraph)
+
+    label_cells: set[tuple[int, int]] = set()
+    for r, line in enumerate(lines):
+        c = line.find("returns")
+        if c != -1:
+            label_cells.update((c + i, r) for i in range(len("returns")))
+    assert label_cells, f"expected to find 'returns' in the rendered output: {lines!r}"
+
+    for node_id, rect in rects.items():
+        box_cells = {
+            (x, y)
+            for x in range(rect.x, rect.x + rect.w)
+            for y in range(rect.y, rect.y + rect.h)
+        }
+        overlap = label_cells & box_cells
+        assert not overlap, f"'returns' label overlaps {node_id}'s box at {overlap}: {lines!r}"
+
+    # Every sibling node name must survive intact — not fused with the
+    # back-edge's label onto one run-together line (the literal defect:
+    # "BetareturnsCee").
+    for name in ("Alpha", "Beta", "Cee", "Dee", "Eee", "Eff", "Hub"):
+        assert name in text
+    for r, line in enumerate(lines):
+        if "returns" in line:
+            assert "Beta" not in line and "Cee" not in line, (
+                f"'returns' fused onto a sibling box's row: {line!r}"
+            )
