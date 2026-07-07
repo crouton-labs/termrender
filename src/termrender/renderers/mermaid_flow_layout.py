@@ -1297,6 +1297,244 @@ def _lane_anchor(direction: Direction, rect: BoxRect) -> tuple[int, int]:
     return rect.bottom_mid if _rank_is_horizontal(direction) else rect.right_mid
 
 
+# --- shared-anchor fan-out (multiple edges through one node's side) ---
+#
+# The four anchor functions above always return the *same* single point for
+# a given (direction, rect) — correct for the common case of one edge per
+# side, but when 2+ edges share a node's exit or entry side (e.g. two
+# forward edges leaving the same node), every one of them would otherwise
+# start/end its path on the exact same cell. Two visible bugs follow: a
+# src-side arrow-kind marker glyph landing there survives only for the
+# last-drawn edge (see mermaid_class.py's UML composition/aggregation
+# case), and — whenever the shared first/last segment happens to tie in
+# length with each edge's own distinguishing segment (routine in LR/RL,
+# where a node's fan-out run and its branch runs can all measure the same
+# few cells) — :func:`_longest_segment`'s tie-break picks the *shared*
+# segment for both edges' labels, so a second label lands on cells the
+# first already claimed and is silently dropped. ``_allocate_edge_anchors``
+# is a pre-pass that spreads such shared anchors along the side's usable
+# span; groups of size 1 (the overwhelming majority of edges) are left
+# alone entirely (no override), so every existing single-edge-per-side
+# render is byte-for-byte unchanged.
+
+
+def _forward_exit_side(direction: Direction) -> str:
+    """Side name matching :func:`_forward_exit` for ``direction`` — a
+    node's forward exit side is the same physical side for every node in
+    the graph (it depends only on direction), which is exactly what makes
+    grouping by ``(node_id, side)`` meaningful."""
+    horiz = _rank_is_horizontal(direction)
+    forward = _forward_increasing(direction)
+    if horiz:
+        return "right" if forward else "left"
+    return "bottom" if forward else "top"
+
+
+def _forward_entry_side(direction: Direction) -> str:
+    """Side name matching :func:`_forward_entry` — the mirror image of
+    :func:`_forward_exit_side`."""
+    horiz = _rank_is_horizontal(direction)
+    forward = _forward_increasing(direction)
+    if horiz:
+        return "left" if forward else "right"
+    return "top" if forward else "bottom"
+
+
+def _lane_side(direction: Direction) -> str:
+    """Side name matching :func:`_lane_anchor`."""
+    return "bottom" if _rank_is_horizontal(direction) else "right"
+
+
+def _diamond_straight_span(rect: BoxRect, label: str) -> tuple[int, int]:
+    """A ``NodeShape.DIAMOND``'s left/right sides are only straight (``│``)
+    across its flat label band, between the two tapered corners — mirrors
+    :meth:`Canvas._draw_diamond`'s own taper calculation exactly (kept in
+    sync deliberately: this is the sizing-time read of that drawing-time
+    geometry) so a spread anchor never lands in the taper region, where
+    the ``│`` a plain rect would have is instead a blank cell just outside
+    the diamond's slanted outline (or the slant glyph itself) — either way
+    a line touching down there reads as visually detached from the shape.
+    Collapses to a single point (``lo == hi``) for a diamond too small to
+    have more than one straight row, exactly reproducing the un-spread
+    single-anchor point in that case."""
+    x, y, w, h = rect.x, rect.y, rect.w, rect.h
+    if w < 5 or h < 3:
+        return y + h // 2, y + h // 2
+    max_taper = max(1, (w - 1) // 2)
+    content_lines = wrap_text(label or "", max(w - 4, 1)) or [""]
+    taper = max(1, (h - len(content_lines)) // 2)
+    taper = min(taper, max_taper, (h - 1) // 2 or 1)
+    if h - 2 * taper < 1:
+        taper = max(1, (h - 1) // 2)
+    lo, hi = y + taper, y + h - taper - 1
+    if lo > hi:
+        lo = hi = y + h // 2
+    return lo, hi
+
+
+def _side_span_for_node(
+    node: "FlowNode | None", rect: BoxRect, side: str
+) -> tuple[int, int]:
+    """Usable ``[lo, hi]`` anchor span along one border side of a placed
+    node — shape-aware only where a shape's straight border cells don't
+    already span the full bounding-rect side (currently just
+    ``NodeShape.DIAMOND``; every other shape's visible border decoration
+    lives entirely within the bounding-rect span :func:`_side_interior_span`
+    already describes, including shapes whose glyphs aren't literally
+    straight everywhere, e.g. the hexagon's corner cut or the
+    parallelogram's skew — those already anchor at the plain bounding-rect
+    mid in the single-edge case, so reusing that same span here keeps the
+    multi-edge case consistent with it rather than introducing a second,
+    stricter geometry only this function knows about). A diamond's
+    top/bottom sides are a single tip point, not a span — collapsed to the
+    bounding-rect mid column/row, same as :func:`_forward_exit` already
+    anchors there.
+    """
+    if node is not None and node.compartments is None and node.shape is NodeShape.DIAMOND:
+        if side in ("left", "right"):
+            return _diamond_straight_span(rect, node.label)
+        mid = rect.x + rect.w // 2
+        return mid, mid
+    return _side_interior_span(rect, side)
+
+
+def _side_interior_span(rect: BoxRect, side: str) -> tuple[int, int]:
+    """Usable ``[lo, hi]`` span (inclusive) along one border side of
+    ``rect``, corners excluded when the side is long enough to spare them
+    (falls back to the full span at minimum box size, where the interior
+    excluding corners would otherwise be empty). This is deliberately a
+    *different* (slightly narrower) span than the single-anchor
+    ``top_mid``/``bottom_mid``/``left_mid``/``right_mid`` properties use —
+    only :func:`_allocate_edge_anchors` (the 2+-edges-per-side case)
+    consults this, so the single-edge case's existing anchor point (and
+    every golden built on it) is untouched."""
+    if side in ("top", "bottom"):
+        lo, hi = rect.x + 1, rect.x + rect.w - 2
+        if lo > hi:
+            lo, hi = rect.x, rect.x + rect.w - 1
+        return lo, hi
+    lo, hi = rect.y + 1, rect.y + rect.h - 2
+    if lo > hi:
+        lo, hi = rect.y, rect.y + rect.h - 1
+    return lo, hi
+
+
+def _side_point(rect: BoxRect, side: str, along: int) -> tuple[int, int]:
+    """A border point on ``rect``'s ``side`` at the given along-the-side
+    coordinate (from :func:`_side_interior_span`/:func:`_spread_points`)."""
+    if side == "top":
+        return (along, rect.y)
+    if side == "bottom":
+        return (along, rect.y + rect.h - 1)
+    if side == "left":
+        return (rect.x, along)
+    return (rect.x + rect.w - 1, along)  # "right"
+
+
+def _spread_points(lo: int, hi: int, n: int) -> list[int]:
+    """``n`` coordinates evenly spread across ``[lo, hi]`` inclusive (the
+    first at ``lo``, the last at ``hi``) — callers only ever invoke this
+    for ``n >= 2``."""
+    if n <= 1:
+        return [(lo + hi) // 2]
+    span = hi - lo
+    return [lo + round(i * span / (n - 1)) for i in range(n)]
+
+
+def _classify_edge(
+    rects: dict[str, BoxRect], direction: Direction, edge: FlowEdge
+) -> str | None:
+    """One of ``"same-rank"``, ``"forward"``, ``"back"``, or ``None``
+    (dangling node-id reference — the parser guarantees valid endpoints,
+    but this module never crashes on one). Shared by
+    :func:`_allocate_edge_anchors` and :func:`_route_edge_path` so the two
+    never disagree about which routing branch an edge takes."""
+    src_rect = rects.get(edge.src)
+    dst_rect = rects.get(edge.dst)
+    if src_rect is None or dst_rect is None:
+        return None
+    src_extent = _rank_extent(direction, src_rect)
+    dst_extent = _rank_extent(direction, dst_rect)
+    same_rank = not (dst_extent[1] < src_extent[0] or src_extent[1] < dst_extent[0])
+    if same_rank:
+        return "same-rank"
+    src_center = (src_extent[0] + src_extent[1]) / 2
+    dst_center = (dst_extent[0] + dst_extent[1]) / 2
+    forward = (dst_center > src_center) == _forward_increasing(direction)
+    return "forward" if forward else "back"
+
+
+def _allocate_edge_anchors(
+    rects: dict[str, BoxRect],
+    direction: Direction,
+    edges: list[FlowEdge],
+    nodes: list[FlowNode] | None = None,
+) -> dict[int, tuple[int, int]]:
+    """Pre-pass over every edge: group forward/back edges by the exit side
+    they share with sibling edges leaving the *same* node (``(src, exit
+    side)`` for forward edges, ``(src, lane side)`` for back-edges), and
+    spread a group's anchor points along that side's usable span (see
+    :func:`_side_interior_span`) — but **only** when 2+ of that group's
+    edges carry a source-side arrow marker (``src_arrow`` or a non-default
+    ``src_arrow_kind`` — the UML composition/aggregation case documented
+    in ``mermaid_class.py``). Left stacked on one shared anchor otherwise
+    (the overwhelming majority of groups): a plain, markerless multi-edge
+    fan-out (``A-->B; A-->C``) *relies* on sharing one exit cell for its
+    trunk-then-tee look (draw_segment's junction bitmask resolves the
+    shared point into a single ┬/┴, not two disjoint stubs) — spreading it
+    would only change this module's own aesthetic choice of where the fan
+    visually splits, not fix anything, and would break that look for every
+    existing fan-out/merge golden. A marker glyph, unlike a plain line
+    junction, has no such union — two different marker glyphs landing on
+    one cell just silently lose all but the last-drawn one, which is the
+    actual defect this closes. (The sibling label-collision defect — two
+    edges from a shared exit tying for "longest straight run" so a second
+    label lands on cells the first already claimed — is fixed separately,
+    in :func:`_longest_segment`'s tie-break, since it needs no anchor
+    change at all.) Returns a dict keyed by index into ``edges``; an edge
+    absent from it keeps the engine's single fixed exit anchor
+    (:func:`_forward_exit`/:func:`_lane_anchor`) unchanged. Same-rank
+    edges and self-loops are never grouped here — same-rank anchors are
+    already per-pair (:func:`_facing_anchor`, dynamic per destination, not
+    a fixed shared side), and self-loops already stack via their own
+    ``self_loop_counter``-driven reach.
+    """
+    node_by_id = {n.id: n for n in (nodes or [])}
+    groups: dict[tuple[str, str], list[int]] = defaultdict(list)
+    for i, e in enumerate(edges):
+        if e.src == e.dst:
+            continue
+        kind = _classify_edge(rects, direction, e)
+        if kind == "forward":
+            groups[(e.src, _forward_exit_side(direction))].append(i)
+        elif kind == "back":
+            groups[(e.src, _lane_side(direction))].append(i)
+        # "same-rank" / None (dangling): no override, unchanged behavior.
+
+    overrides: dict[int, tuple[int, int]] = {}
+    for (node_id, side), idxs in groups.items():
+        if len(idxs) < 2:
+            continue
+        marked = [
+            i
+            for i in idxs
+            if edges[i].src_arrow or edges[i].src_arrow_kind != "default"
+        ]
+        if len(marked) < 2:
+            continue
+        rect = rects.get(node_id)
+        if rect is None:
+            continue
+        ordered = sorted(
+            idxs, key=lambda i: _abstract(direction, rects[edges[i].dst].center)[1]
+        )
+        lo, hi = _side_span_for_node(node_by_id.get(node_id), rect, side)
+        spread = _spread_points(lo, hi, len(ordered))
+        for idx, along in zip(ordered, spread):
+            overrides[idx] = _side_point(rect, side, along)
+    return overrides
+
+
 def _abstract(direction: Direction, point: tuple[int, int]) -> tuple[int, int]:
     """``point`` decomposed into (primary, secondary) = (rank-axis coord,
     off-axis coord) — the coordinate frame the path-shape helpers reason
@@ -1363,11 +1601,30 @@ def _longest_segment(
     points: list[tuple[int, int]],
 ) -> tuple[tuple[int, int], tuple[int, int]] | None:
     """The longest straight run in a polyline — where an edge label is
-    centered."""
+    centered. Ties break toward the *last* (furthest downstream) segment
+    rather than the first. This matters specifically for a forward Z-path
+    out of a node with 2+ outgoing edges: its first segment is the shared
+    exit-side run common to every sibling edge leaving that node (see
+    :func:`_allocate_edge_anchors`'s docstring), so on a tie it is the one
+    segment guaranteed to collide with a sibling's own label. Preferring
+    the last segment picks each edge's own distinguishing run near its
+    destination instead — routine in LR/RL, where a node's shared fan-out
+    run and its per-branch runs often measure the same few cells (TB
+    rarely ties here at all: its branch runs are typically much longer
+    than the shared trunk, so this tie-break is moot there and every
+    existing TB/back-edge/self-loop golden is unaffected — see this
+    module's test suite for the confirming corpus)."""
     segments = list(zip(points, points[1:]))
     if not segments:
         return None
-    return max(segments, key=lambda seg: _segment_length(*seg))
+    best = segments[0]
+    best_len = _segment_length(*best)
+    for seg in segments[1:]:
+        length = _segment_length(*seg)
+        if length >= best_len:
+            best = seg
+            best_len = length
+    return best
 
 
 def _label_positions(length: int, center: int, lo: int, hi: int) -> list[int]:
@@ -1527,6 +1784,7 @@ def _route_edge_path(
     edge: FlowEdge,
     lane_counter: list[int],
     self_loop_counter: dict[str, int],
+    exit_anchor: tuple[int, int] | None = None,
 ) -> list[tuple[int, int]] | None:
     """Compute one edge's polyline points: anchors chosen by relative rank
     position, an L/Z/C path shape. Pure path computation only — drawing is
@@ -1535,6 +1793,15 @@ def _route_edge_path(
     another edge's already-placed label. Dangling node-id references
     return ``None`` (defensive no-op — the parser guarantees valid
     endpoints; this module never crashes on one).
+
+    ``exit_anchor``, when given (from :func:`_allocate_edge_anchors`),
+    replaces the src border point that would otherwise come from
+    :func:`_forward_exit`/:func:`_lane_anchor` — used only when this
+    edge's exit side is shared with a sibling edge that also carries a
+    source-side arrow marker; ``None`` (the overwhelming common case)
+    reproduces the original single-anchor behavior exactly. Same-rank
+    edges and self-loops ignore it (see :func:`_allocate_edge_anchors`'s
+    docstring for why).
     """
     src_rect = rects.get(edge.src)
     dst_rect = rects.get(edge.dst)
@@ -1546,22 +1813,14 @@ def _route_edge_path(
         self_loop_counter[edge.src] = lane + 1
         return _self_loop_points(direction, src_rect, lane)
 
-    src_extent = _rank_extent(direction, src_rect)
-    dst_extent = _rank_extent(direction, dst_rect)
-    same_rank = not (dst_extent[1] < src_extent[0] or src_extent[1] < dst_extent[0])
+    kind = _classify_edge(rects, direction, edge)
 
-    if same_rank:
+    if kind == "same-rank":
         return [_facing_anchor(src_rect, dst_rect), _facing_anchor(dst_rect, src_rect)]
 
-    src_center = (src_extent[0] + src_extent[1]) / 2
-    dst_center = (dst_extent[0] + dst_extent[1]) / 2
-    forward = (dst_center > src_center) == _forward_increasing(direction)
-    if forward:
-        return _z_path(
-            direction,
-            _forward_exit(direction, src_rect),
-            _forward_entry(direction, dst_rect),
-        )
+    if kind == "forward":
+        exit_pt = exit_anchor if exit_anchor is not None else _forward_exit(direction, src_rect)
+        return _z_path(direction, exit_pt, _forward_entry(direction, dst_rect))
 
     lane = lane_counter[0]
     lane_counter[0] += 1
@@ -1570,11 +1829,9 @@ def _route_edge_path(
         + _LANE_MARGIN
         + lane * _LANE_GAP
     )
+    exit_pt = exit_anchor if exit_anchor is not None else _lane_anchor(direction, src_rect)
     return _lane_path(
-        direction,
-        _lane_anchor(direction, src_rect),
-        _lane_anchor(direction, dst_rect),
-        lane_secondary,
+        direction, exit_pt, _lane_anchor(direction, dst_rect), lane_secondary
     )
 
 
@@ -1652,9 +1909,17 @@ def layout_flowgraph(g: FlowGraph, width: int) -> list[str]:
         # a cell — labels are only ever safe once no more lines are coming.
         lane_counter = [0]
         self_loop_counter: dict[str, int] = {}
+        exit_overrides = _allocate_edge_anchors(rects, g.direction, g.edges, g.nodes)
         edge_paths: list[tuple[FlowEdge, list[tuple[int, int]]]] = []
-        for e in g.edges:
-            points = _route_edge_path(rects, g.direction, e, lane_counter, self_loop_counter)
+        for i, e in enumerate(g.edges):
+            points = _route_edge_path(
+                rects,
+                g.direction,
+                e,
+                lane_counter,
+                self_loop_counter,
+                exit_overrides.get(i),
+            )
             if points is not None:
                 edge_paths.append((e, points))
         for e, points in edge_paths:

@@ -167,6 +167,19 @@ def test_aggregation_hollow_diamond_at_owner():
     assert any("◇" in line for line in lines)
 
 
+def test_two_source_side_markers_from_one_class_both_survive():
+    # Regression: Whole both composes Part1 and aggregates Part2, so both
+    # relations' source-side marker used to land on Whole's one shared
+    # exit anchor — only the last-drawn glyph survived there. Both must
+    # now be visible (see mermaid_flow_layout.py's _allocate_edge_anchors).
+    lines = _lines("classDiagram\nWhole *-- Part1\nWhole o-- Part2\n")
+    joined = "\n".join(lines)
+    assert "◆" in joined
+    assert "◇" in joined
+    for name in ("Whole", "Part1", "Part2"):
+        assert name in joined
+
+
 def test_association_filled_arrow_at_target():
     lines = _lines("classDiagram\nDriver --> Car\n")
     assert any("▼" in line for line in lines)

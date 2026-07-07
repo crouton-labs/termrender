@@ -70,19 +70,6 @@ Known degradations (by design, not bugs)
 - ``note`` statements, `<<...>>` generic constraints beyond the ``~T~``
   substitution, and class-diagram namespaces are not recognized — lines
   using them are silently dropped (best-effort parsing, never raised).
-- A relation's *source*-side marker (inheritance/composition/aggregation's
-  glyph on the "whole"/parent class) is drawn at that class's single
-  shared exit anchor for its rank-flow direction. When one class has
-  several outgoing relations that each carry a source-side marker (e.g. a
-  class that both composes one collaborator and aggregates another), all
-  of them exit through that same anchor cell and only the last-drawn
-  marker glyph survives there — topology and line routing stay correct
-  for every edge, but the specific marker glyph shown at that shared point
-  reflects only one of the colliding relations. Rare in small diagrams
-  (most classes have at most one source-marked outgoing relation);
-  accepted the same way the engine already accepts dense-graph line
-  crossings, rather than reworking shared anchor allocation across the
-  underlying flowchart engine.
 - See ``mermaid_flow_layout.py``'s docstring for the inherited engine
   degradations (dense-graph crossings, CJK wrap width, minimum-box-size
   cosmetics) — this renderer's output goes through the same rasterizer and

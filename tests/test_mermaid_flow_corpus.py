@@ -361,6 +361,36 @@ def test_lr_direction_golden():
 
 
 # --------------------------------------------------------------------------
+# LR fan-out with 2 labeled edges — both labels must survive (regression:
+# a shared exit anchor used to make the two edges' first segments tie for
+# "longest straight run", so the second label silently overwrote nothing
+# and just never appeared — see mermaid_flow_layout.py's
+# _longest_segment/_allocate_edge_anchors docstrings)
+# --------------------------------------------------------------------------
+
+
+def test_lr_fan_out_with_labels_both_present_golden():
+    lines = _lines(
+        "flowchart LR\n"
+        "    A{check} -->|yes| B[Approved]\n"
+        "    A -->|no| C[Rejected]\n"
+    )
+    assert lines == [
+        "              \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510",
+        "           yes\u25b6 Approved \u2502",
+        "  \u2571   \u2572    \u2502  \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518",
+        " \u2571     \u2572   \u2502",
+        "\u2502 check \u2502\u2500\u2500\u2524",
+        " \u2572     \u2571   \u2502",
+        "  \u2572   \u2571    \u2502  \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510",
+        "           no\u2500\u25b6 Rejected \u2502",
+        "              \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518",
+    ]
+    text = "\n".join(lines)
+    assert "yes" in text and "no" in text
+
+
+# --------------------------------------------------------------------------
 # Subgraph and nested subgraph
 # --------------------------------------------------------------------------
 
