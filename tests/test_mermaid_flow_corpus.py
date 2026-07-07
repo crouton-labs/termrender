@@ -195,16 +195,16 @@ def test_edge_style_bidirectional_golden():
 
 
 def test_pipe_label_golden():
-    # The rank-band gap widens to fit the label in full (see
-    # mermaid_flow_layout._rank_gap_overrides) — a 2-char label needs a
-    # taller gap than the base _ROW_GAP alone provides.
+    # The rank-band gap widens past the unlabeled _ROW_GAP to a small
+    # constant (see mermaid_flow_layout._LABELED_ROW_GAP) so the label gets
+    # its own clear row — the constant does not scale with the label's
+    # text length.
     assert _lines("graph TD\nA-->|hi|B\n") == [
         "┌───┐",
         "│ A │",
         "└───┘",
         "  │",
         " hi",
-        "  │",
         "  │",
         "┌─▼─┐",
         "│ B │",
@@ -213,18 +213,15 @@ def test_pipe_label_golden():
 
 
 def test_inline_label_golden():
-    # Same rank-band widening as above, scaled to the longer "go now" label.
+    # Same constant rank-band gap as above — "go now" is longer than "hi"
+    # but the vertical gap stays the same _LABELED_ROW_GAP; only the
+    # label's own row is wider.
     assert _lines("graph TD\nA -- go now --> B\n") == [
         "┌───┐",
         "│ A │",
         "└───┘",
         "  │",
-        "  │",
-        "  │",
         "go now",
-        "  │",
-        "  │",
-        "  │",
         "  │",
         "┌─▼─┐",
         "│ B │",

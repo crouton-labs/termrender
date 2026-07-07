@@ -266,6 +266,66 @@ def test_order_example_golden_topology():
 
 
 # --------------------------------------------------------------------------
+# Vertical compactness (regression: constant inter-layer gap regardless of
+# node height — see mermaid_flow_layout._LABELED_ROW_GAP)
+# --------------------------------------------------------------------------
+
+
+def test_compartmented_entities_get_constant_gap_not_height_scaled():
+    # Two tall (compartmented) entities joined by one labeled relationship
+    # used to burn ~15-17 blank connector rows for this single edge hop —
+    # the inter-rank gap scaled with the edge label's *text length*
+    # (visual_len), not with node height, but on ER/class diagrams nearly
+    # every edge carries a label, so the effect showed up exactly when
+    # nodes were tall. The gap between adjacent-rank boxes must now stay a
+    # small constant: enough for a connector row, the label's own row, and
+    # one more connector row — independent of both the label's length and
+    # the boxes' height.
+    src = (
+        "erDiagram\n"
+        "    CUSTOMER ||--o{ ORDER : places\n"
+        "    CUSTOMER {\n"
+        "        string name PK\n"
+        "        string email\n"
+        "    }\n"
+        "    ORDER {\n"
+        "        int orderNumber PK\n"
+        "        string status\n"
+        "    }\n"
+    )
+    lines = _lines(src, width=100)
+    assert _has_box_glyphs(lines)
+    joined = "\n".join(lines)
+
+    # Full row budget: two 6-row compartmented boxes plus a small constant
+    # gap between them — well under the ~27 rows the scaling bug produced.
+    assert len(lines) <= 18, f"expected a compact render, got {len(lines)} rows:\n{joined}"
+
+    # The label survives in full, uncorrupted, and every box border row is
+    # single-glyph clean (no overlapping glyphs from a collapsed gap).
+    assert "places" in joined
+    for attr in ("string name PK", "string email", "int orderNumber PK", "string status"):
+        assert attr in joined
+
+    cust_row, _ = _row_col(lines, "CUSTOMER")
+    order_row, _ = _row_col(lines, "ORDER")
+    label_row, _ = _row_col(lines, "places")
+    assert cust_row < label_row < order_row
+
+    # The connector gap between the two boxes is a small constant, not
+    # scaled by the label's width: the blank/connector run directly above
+    # and below the label row is short.
+    cust_bottom = next(
+        r for r in range(cust_row, len(lines)) if "└" in lines[r]
+    )
+    order_top = next(
+        r for r in range(order_row, -1, -1) if "┌" in lines[r]
+    )
+    gap_rows = order_top - cust_bottom - 1
+    assert gap_rows <= 5, f"inter-layer gap grew to {gap_rows} rows:\n{joined}"
+
+
+# --------------------------------------------------------------------------
 # Degradation: malformed input, empty body, literal-glyph sanitization
 # --------------------------------------------------------------------------
 

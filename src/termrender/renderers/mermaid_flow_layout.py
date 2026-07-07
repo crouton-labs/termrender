@@ -831,24 +831,45 @@ _GAP_X = 3          # minimum border-to-border gap between boxes in one rank/ban
 _ROW_GAP = 2         # minimum gap between rank bands
 _COMPONENT_GUTTER = 4  # gap between independently-laid-out components
 _LABEL_GAP_PAD = 1   # cells of breathing room either side of a label's own text
-                     # when it forces a rank-band gap wider than _ROW_GAP.
+                     # when it forces a rank-band gap wider than _ROW_GAP
+                     # along the axis the label's text actually runs.
+_LABELED_ROW_GAP = 3  # inter-rank gap when a label sits on that band's vertical
+                      # run in *final* screen space (TB/BT): one blank row, the
+                      # label's own row, one more blank row. A constant, not
+                      # scaled by the label's text length — the label reads
+                      # horizontally on a single row regardless of how many
+                      # characters it has, so the row *count* needed is fixed.
 
 
 def _rank_gap_overrides(
-    edges: list[FlowEdge], rank_of: dict[str, int]
+    edges: list[FlowEdge], rank_of: dict[str, int], direction: Direction
 ) -> dict[int, int]:
     """Minimum inter-rank-band gap keyed by the *lower* rank of each
     adjacent-rank transition, widened past ``_ROW_GAP`` wherever a labeled
     edge directly connects that transition's two ranks. A forward edge
     between adjacent ranks routes as a single straight run (or a Z path
     that still crosses the same inter-rank band) whose only clear space is
-    this gap — at the base ``_ROW_GAP`` a label wider than a couple of
-    cells has nowhere to go but onto the boxes it connects, which is
-    exactly the short LR/adjacent-rank clipped-label bug this closes.
+    this gap.
+
+    The rank axis is native rows here, pre-direction-transform (see the
+    adapter docstring) — whether that ends up as *vertical* or
+    *horizontal* space on screen depends on ``direction``. For LR/RL the
+    transpose turns this band into the final horizontal run the label
+    reads along, so it genuinely needs ``visual_len(label)`` cells of
+    width — at the base ``_ROW_GAP`` a label wider than a couple of cells
+    has nowhere to go but onto the boxes it connects (the short
+    LR/adjacent-rank clipped-label bug this closes). For TB/BT the band
+    stays vertical on screen and the label is drawn horizontally *across*
+    the connector column (:func:`_draw_label_on_segment`'s vertical-segment
+    branch) — it needs a little row headroom to have its own clear row,
+    not a row per character, so it gets the small constant
+    ``_LABELED_ROW_GAP`` regardless of the label's length.
+
     Non-adjacent-rank edges (back-edges, multi-rank spans) don't constrain
     the gap here — they route through their own side lane, not this band.
     """
     overrides: dict[int, int] = {}
+    horizontal_on_screen = direction in (Direction.LR, Direction.RL)
     for e in edges:
         if e.src == e.dst or not e.label:
             continue
@@ -859,7 +880,10 @@ def _rank_gap_overrides(
         lo_r, hi_r = (r_src, r_dst) if r_src <= r_dst else (r_dst, r_src)
         if hi_r - lo_r != 1:
             continue
-        needed = visual_len(e.label) + 2 * _LABEL_GAP_PAD
+        if horizontal_on_screen:
+            needed = visual_len(e.label) + 2 * _LABEL_GAP_PAD
+        else:
+            needed = _LABELED_ROW_GAP
         overrides[lo_r] = max(overrides.get(lo_r, _ROW_GAP), needed)
     return overrides
 
@@ -922,7 +946,7 @@ def _place_nodes(
             ranks[sug.grx[v].rank].append(v)
 
         rank_of = {v.data: sug.grx[v].rank for v in comp_vertices}
-        gap_overrides = _rank_gap_overrides(edges, rank_of)
+        gap_overrides = _rank_gap_overrides(edges, rank_of, direction)
 
         band_top_for_rank: dict[int, int] = {}
         cursor = 0
