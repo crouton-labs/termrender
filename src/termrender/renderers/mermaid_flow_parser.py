@@ -42,11 +42,12 @@ Grammar covered
   display title; a bare ``subgraph Sub1`` (no brackets) uses the token as
   both id and title. Nesting is a stack: a node declared while a subgraph is
   open is added to the *innermost* currently-open subgraph's ``node_ids``
-  only (not its ancestors). An unterminated subgraph at end-of-input is
-  auto-closed (attached to its parent, or promoted to a top-level result)
-  rather than dropped.
-- ``class``/``classDef``/``style``/``click``/``linkStyle`` lines and ``%%``
-  comments are consumed and dropped — no trace in the model.
+  only (not its ancestors). An unterminated subgraph at end-of-input raises
+  :class:`FlowchartError`.
+- Well-formed ``class``/``classDef``/``style``/``click``/``linkStyle``/
+  ``accTitle``/``accDescr`` lines and ``%%`` comments are consumed and
+  dropped — no trace in the model. Malformed directive-looking lines are
+  not special-cased and will raise.
 
 Known degradations (by design, not bugs)
 -----------------------------------------
@@ -54,10 +55,12 @@ Known degradations (by design, not bugs)
   prelude — ``%%`` comments, ``%%{init: ...}%%`` directives, ``---``
   frontmatter — via :func:`~termrender.renderers.mermaid_prelude.
   strip_prelude_lines`) is checked for the ``graph``/``flowchart`` header;
-  if it is missing, :func:`parse` raises :class:`FlowchartError`. Every
-  other malformed line in the body (an edge with no recognizable endpoint,
-  a shape with mismatched brackets, a stray ``end`` with nothing open) is
-  silently dropped instead — best-effort, never raises.
+  if it is missing, :func:`parse` raises :class:`FlowchartError`. In the
+  body, only well-formed presentational directives (``%%`` comments,
+  ``classDef``, ``class``, ``style``, ``click``, ``linkStyle``,
+  ``accTitle``, ``accDescr``) are ignored; malformed directive-looking
+  lines, every other unrecognized line, dangling or partial connector,
+  stray ``end``, or unterminated subgraph raises :class:`FlowchartError`.
 - The inline dash-label form (``A -- text --> B``) requires the opening
   and closing delimiters to be the canonical 2-character tokens (``--``,
   ``-.``, ``==``) with at least one space around the label text. A literal
@@ -68,7 +71,7 @@ Known degradations (by design, not bugs)
   unbracketed label text).
 - Node/subgraph identifiers must start with an alphanumeric or ``_``
   character; the rest of the id token may also contain ``-``. IDs using
-  other leading characters are not recognized (the line degrades silently).
+  other leading characters are not recognized.
 """
 
 from __future__ import annotations
@@ -104,7 +107,36 @@ _DIRECTION_RE = re.compile(r"^(TB|TD|LR|RL|BT)\b", re.IGNORECASE)
 _SUBGRAPH_RE = re.compile(r"^subgraph\b\s*(.*)$", re.IGNORECASE)
 _SUBGRAPH_ID_TITLE_RE = re.compile(r"^(\S+)\s*\[(.*)\]$")
 _END_RE = re.compile(r"^end$", re.IGNORECASE)
-_IGNORED_RE = re.compile(r"^(classDef|class|click|linkStyle|style)\b", re.IGNORECASE)
+_CLASSDEF_RE = re.compile(r"^classDef\b\s+\S+\s+\S.*$", re.IGNORECASE)
+_CLASS_RE = re.compile(r"^class\b(?:\s+\S+){2,}", re.IGNORECASE)
+_STYLE_RE = re.compile(r"^style\b(?:\s+\S+){2,}", re.IGNORECASE)
+_CLICK_RE = re.compile(r"^click\b(?:\s+\S+){2,}", re.IGNORECASE)
+_LINKSTYLE_RE = re.compile(r"^linkStyle\b(?:\s+\S+){2,}", re.IGNORECASE)
+_ACCTITLE_RE = re.compile(r"^accTitle\b\s*:?\s*\S.*$", re.IGNORECASE)
+_ACCDESCR_RE = re.compile(r"^accDescr\b\s*:?\s*\S.*$", re.IGNORECASE)
+_PRESENTATIONAL_RE = (
+    _CLASSDEF_RE,
+    _CLASS_RE,
+    _STYLE_RE,
+    _CLICK_RE,
+    _LINKSTYLE_RE,
+    _ACCTITLE_RE,
+    _ACCDESCR_RE,
+)
+_DIRECTIVE_LIKE_RE = re.compile(
+    r"^(?:classDef|class|style|click|linkStyle|accTitle|accDescr)(?:\s|$)",
+    re.IGNORECASE,
+)
+
+
+def _is_presentational_directive(stmt: str) -> bool:
+    return any(pattern.match(stmt) for pattern in _PRESENTATIONAL_RE)
+
+
+def _is_malformed_presentational_directive(stmt: str) -> bool:
+    return bool(_DIRECTIVE_LIKE_RE.match(stmt)) and not _is_presentational_directive(stmt)
+
+
 _COMMENT_RE = re.compile(r"^%%")
 
 _NODE_ID_RE = re.compile(r"^([A-Za-z0-9_][A-Za-z0-9_-]*)(.*)$")
@@ -260,7 +292,7 @@ def _parse_node_spec(text: str) -> tuple[str, str, NodeShape, bool] | None:
 
     Returns ``None`` when ``text`` doesn't start with a valid id token, or
     carries trailing content that doesn't match any recognized shape
-    delimiter (malformed shape — dropped silently by the caller)."""
+    delimiter (malformed shape — treated as no match by the caller)."""
     m = _NODE_ID_RE.match(text)
     if not m:
         return None
@@ -299,18 +331,14 @@ def _register(
         stack[-1].node_ids.append(node_id)
 
 
-def _resolve_nodes(
-    text: str, nodes: dict[str, FlowNode], stack: list[Subgraph]
-) -> list[str]:
-    ids: list[str] = []
+def _parse_node_group(text: str) -> list[tuple[str, str, NodeShape, bool]]:
+    parsed: list[tuple[str, str, NodeShape, bool]] = []
     for part in _split_amp(text.strip()):
-        parsed = _parse_node_spec(part)
-        if parsed is None:
-            continue
-        node_id, label, shape, is_bare = parsed
-        _register(nodes, stack, node_id, label, shape, is_bare)
-        ids.append(node_id)
-    return ids
+        node = _parse_node_spec(part)
+        if node is None:
+            return []
+        parsed.append(node)
+    return parsed
 
 
 def _try_edge(
@@ -335,7 +363,17 @@ def _try_edge(
         prev_end = m.end()
     groups.append(stmt[prev_end:])
 
-    resolved = [_resolve_nodes(group, nodes, stack) for group in groups]
+    parsed_groups = [_parse_node_group(group) for group in groups]
+    if any(not group for group in parsed_groups):
+        raise FlowchartError(f"malformed flowchart edge statement: {stmt!r}")
+
+    resolved: list[list[str]] = []
+    for group in parsed_groups:
+        ids: list[str] = []
+        for node_id, label, shape, is_bare in group:
+            _register(nodes, stack, node_id, label, shape, is_bare)
+            ids.append(node_id)
+        resolved.append(ids)
 
     for i, m in enumerate(connectors):
         gd = m.groupdict()
@@ -450,10 +488,15 @@ def parse(source: str) -> FlowGraph:
         if _END_RE.match(stmt):
             if stack:
                 _close_subgraph(stack, roots)
+            else:
+                raise FlowchartError("stray 'end' with nothing open")
             continue
 
-        if _IGNORED_RE.match(stmt):
+        if _is_presentational_directive(stmt):
             continue
+
+        if _is_malformed_presentational_directive(stmt):
+            raise FlowchartError(f"unrecognized flowchart statement: {stmt!r}")
 
         if _try_edge(stmt, nodes, edges, stack):
             continue
@@ -461,11 +504,10 @@ def parse(source: str) -> FlowGraph:
         if _try_node_decl(stmt, nodes, stack):
             continue
 
-        # Unrecognized body line: consumed silently, best-effort.
+        raise FlowchartError(f"unrecognized flowchart statement: {stmt!r}")
 
-    # Auto-close any subgraphs left open at end-of-input.
-    while stack:
-        _close_subgraph(stack, roots)
+    if stack:
+        raise FlowchartError("unterminated subgraph")
 
     return FlowGraph(
         direction=direction,

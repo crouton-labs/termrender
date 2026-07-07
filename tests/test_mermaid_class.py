@@ -294,6 +294,56 @@ def test_lr_direction():
 # --------------------------------------------------------------------------
 
 
+def test_unrecognized_body_line_forces_raw_echo():
+    src = 'classDiagram\nclass Animal\nnote for Animal "hello ┌"'
+    lines = _lines(src)
+    assert lines == ["classDiagram", "class Animal", 'note for Animal "hello ?"']
+    assert not _has_box_glyphs(lines)
+
+
+def test_unterminated_class_body_forces_raw_echo():
+    src = "classDiagram\nclass A {\n+foo"
+    lines = _lines(src)
+    assert lines == ["classDiagram", "class A {", "+foo"]
+    assert not _has_box_glyphs(lines)
+
+
+def test_malformed_presentational_directive_without_payload_forces_raw_echo():
+    src = "classDiagram\nclass Animal\nstyle"
+    lines = _lines(src)
+    assert lines == ["classDiagram", "class Animal", "style"]
+    assert not _has_box_glyphs(lines)
+
+
+def test_malformed_class_assignment_directive_forces_raw_echo():
+    src = "classDiagram\nclass Animal\nclass this is not mermaid ┌"
+    lines = _lines(src)
+    assert lines == ["classDiagram", "class Animal", "class this is not mermaid ?"]
+    assert not _has_box_glyphs(lines)
+
+
+def test_presentational_directive_inside_class_body_forces_raw_echo():
+    src = "classDiagram\nclass Animal {\nstyle\n}\n"
+    lines = _lines(src)
+    assert lines == ["classDiagram", "class Animal {", "style", "}"]
+    assert not _has_box_glyphs(lines)
+
+
+def test_presentational_lines_are_ignored_and_diagram_renders_natively():
+    src = (
+        "classDiagram\n"
+        "classDef important fill:#f00,stroke:#333,stroke-width:2px\n"
+        "style Animal fill:#efe,stroke:#333\n"
+        "cssClass Animal important\n"
+        "accTitle: Animal diagram\n"
+        "accDescr: accessible description\n"
+        "class Animal\n"
+    )
+    lines = _lines(src)
+    assert _has_box_glyphs(lines)
+    assert any("Animal" in line for line in lines)
+
+
 def test_non_class_diagram_source_degrades_to_raw_echo():
     src = "graph TD\nA-->B\n"
     lines = _lines(src)

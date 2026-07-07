@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from termrender.renderers.mermaid_flow import render_flowchart
 
 _BOX_GLYPH_RE = re.compile(r"[\u2500-\u259F\u25A0-\u25FF]")
@@ -95,7 +97,8 @@ def test_lr_short_edge_label_renders_in_full():
 
 
 # --------------------------------------------------------------------------
-# Labeled back-edge cycle — the exact shape that panics the Go binary
+# Labeled back-edge cycle — a shape that stresses the router's back-edge
+# lane allocation and label placement
 # --------------------------------------------------------------------------
 
 
@@ -220,6 +223,61 @@ def test_empty_body_headed_diagram_raw_echoes():
     assert lines == ["graph TD", "%% just a comment, no nodes"]
     text = "\n".join(lines)
     assert not _BOX_GLYPH_RE.search(text)
+
+
+def test_unrecognized_body_line_forces_raw_echo():
+    source = "graph TD\nA-->B\nthis is not mermaid ┌"
+    lines = render_flowchart(source, width=80)
+    assert lines == ["graph TD", "A-->B", "this is not mermaid ?"]
+    text = "\n".join(lines)
+    assert not _BOX_GLYPH_RE.search(text)
+
+
+def test_unterminated_subgraph_forces_raw_echo():
+    source = "graph TD\nsubgraph S\nA-->B"
+    lines = render_flowchart(source, width=80)
+    assert lines == ["graph TD", "subgraph S", "A-->B"]
+    text = "\n".join(lines)
+    assert not _BOX_GLYPH_RE.search(text)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "graph TD\nA-->B\nclass\n",
+        "graph TD\nA-->B\nclassDef\n",
+        "graph TD\nA-->B\nclassDef important\n",
+        "graph TD\nA-->B\nstyle\n",
+        "graph TD\nA-->B\nclick\n",
+        "graph TD\nA-->B\nlinkStyle\n",
+        "graph TD\nA-->B\naccTitle\n",
+        "graph TD\nA-->B\naccDescr\n",
+    ],
+)
+def test_malformed_presentational_directive_forces_raw_echo(source):
+    lines = render_flowchart(source, width=80)
+    assert lines == [line.rstrip() for line in source.splitlines()]
+    text = "\n".join(lines)
+    assert not _BOX_GLYPH_RE.search(text)
+
+
+def test_presentational_directives_with_acc_title_and_descr_still_render_natively():
+    source = """graph TD
+A-->B
+classDef important fill:#f00
+class A important
+style A fill:#fff
+click A \"http://example.com\"
+linkStyle 0 stroke:#f00
+accTitle Demo title
+accDescr Demo description
+accTitle: Demo title
+accDescr: Demo description
+"""
+    lines = render_flowchart(source, width=80)
+    text = "\n".join(lines)
+    assert "A" in text and "B" in text
+    assert any(_BOX_GLYPH_RE.search(line) for line in lines)
 
 
 def test_degraded_echo_sanitizes_box_glyphs_present_in_raw_source():

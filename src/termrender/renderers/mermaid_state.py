@@ -1,8 +1,8 @@
 """Native ASCII renderer for mermaid ``stateDiagram``/``stateDiagram-v2`` sources.
 
-Standalone module: exposes a single pure function, ``render_state``. Not
-wired into ``mermaid.py``'s dispatcher (a later, orchestrator-owned phase)
-— nothing in this package imports it yet.
+Standalone module: exposes a single pure function, ``render_state``.
+Wired into ``mermaid.py``'s dispatcher for ``stateDiagram`` and
+``stateDiagram-v2`` sources.
 
 Layout model
 ------------
@@ -78,12 +78,11 @@ Known degradations (by design, not bugs)
   the flowchart parser's node re-declaration policy.
 - Fork/join pseudo-states render as the engine's plain small rectangle,
   not a bar — see *Grammar supported* above.
-- Everything else the underlying flowchart engine already documents as a
-  degradation (dense-graph crossings, CJK label wrapping, minimum-box-size
-  cosmetics, a subgraph that isn't contiguous enough for a clean frame
-  flattening instead) applies unchanged, since this module draws through
-  that engine. See ``mermaid_flow_layout.py``'s and ``mermaid_flow.py``'s
-  module docstrings.
+- Only the explicitly supported presentational directives are ignored:
+  ``%%`` comments, ``classDef NAME ...``, ``class STATE NAME``, ``style STATE ...``,
+  ``accTitle ...``, and ``accDescr ...``. Any other unrecognized body line or
+  unterminated composite state raises, and the public renderer raw-echoes
+  the original source.
 """
 
 from __future__ import annotations
@@ -91,6 +90,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from termrender.renderers.mermaid_degradation import raw_echo
 from termrender.renderers.mermaid_flow_layout import layout_flowgraph
 from termrender.renderers.mermaid_flow_model import (
     Direction,
@@ -134,6 +134,10 @@ _NOTE_BLOCK_START_RE = re.compile(
     r"^note\s+(left|right)\s+of\s+(\S+)\s*$", re.IGNORECASE
 )
 _NOTE_END_RE = re.compile(r"^end\s+note\s*$", re.IGNORECASE)
+_CLASSDEF_RE = re.compile(r"^classDef\s+\S+\s+.+$", re.IGNORECASE)
+_CLASS_STYLE_RE = re.compile(r"^class\s+\S+(?:,\S+)*\s+\S+$", re.IGNORECASE)
+_STYLE_RE = re.compile(r"^style\s+\S+\s+.+$", re.IGNORECASE)
+_ACC_RE = re.compile(r"^acc(?:Title|Descr)\b\s*:?\s+\S.*$", re.IGNORECASE)
 
 # Non-greedy src: a plain id never legitimately contains "-->", but the
 # greedy alternative would still (via backtracking) find *a* match — lazy
@@ -308,7 +312,8 @@ def parse(source: str) -> FlowGraph:
 
     Raises:
         StateDiagramError: If ``source`` is not a mermaid state diagram at
-            all (missing the ``stateDiagram`` header).
+            all, or if the body contains an unrecognized statement or an
+            unterminated composite state.
     """
     lines = source.splitlines()
     sniff_lines = strip_prelude_lines(lines)
@@ -364,6 +369,15 @@ def parse(source: str) -> FlowGraph:
             direction = Direction.TB if token == "TD" else Direction(token)
             continue
 
+        if _CLASSDEF_RE.match(line):
+            continue
+        if _CLASS_STYLE_RE.match(line):
+            continue
+        if _STYLE_RE.match(line):
+            continue
+        if _ACC_RE.match(line):
+            continue
+
         m = _NOTE_INLINE_RE.match(line)
         if m:
             _attach_note(
@@ -404,6 +418,8 @@ def parse(source: str) -> FlowGraph:
                 _close_composite(stack, roots)
                 if len(scopes) > 1:
                     scopes.pop()
+            else:
+                raise StateDiagramError("stray '}' with nothing open")
             continue
 
         m = _ANNOTATION_RE.match(line)
@@ -438,7 +454,7 @@ def parse(source: str) -> FlowGraph:
             _register(nodes, stack, m.group(1))
             continue
 
-        # Unrecognized body line: consumed silently, best-effort.
+        raise StateDiagramError(f"unrecognized state diagram statement: {line!r}")
 
     if note_lines is not None:
         _attach_note(
@@ -446,8 +462,8 @@ def parse(source: str) -> FlowGraph:
             " ".join(note_lines), counters,
         )
 
-    while stack:
-        _close_composite(stack, roots)
+    if stack:
+        raise StateDiagramError("unterminated composite state")
 
     return FlowGraph(
         direction=direction,
@@ -455,13 +471,6 @@ def parse(source: str) -> FlowGraph:
         edges=edges,
         subgraphs=roots,
     )
-
-
-# Same ranges the downstream attach viewer uses to detect render *success*
-# (see mermaid_flow.py's identical guard). The raw-echo path must never
-# contain one of these, even when malformed/degenerate source itself
-# happens to contain a literal box-drawing or geometric glyph.
-_GLYPH_RANGE_RE = re.compile("[\u2500-\u259f\u25a0-\u25ff]")
 
 
 def render_state(source: str, width: int) -> list[str]:
@@ -472,9 +481,9 @@ def render_state(source: str, width: int) -> list[str]:
     (each line ``\\n``-split and ``.rstrip()``-ed, containing no
     box-drawing glyphs) exactly when:
 
-    1. The source isn't a state diagram at all (no ``stateDiagram`` header
-       on its first non-blank, post-prelude line) — :func:`parse` raises
-       :class:`StateDiagramError`.
+    1. :func:`parse` raises :class:`StateDiagramError` — because the
+       source is not a state diagram at all, or because the body contains
+       unrecognized syntax / an unterminated composite state.
     2. Parsing succeeds but yields zero states (an empty or comment-only
        diagram body) — nothing to draw.
     3. Any unexpected exception escapes :func:`~termrender.renderers.
@@ -499,21 +508,17 @@ def render_state(source: str, width: int) -> list[str]:
     try:
         graph = parse(source)
     except StateDiagramError:
-        return _raw_echo(source)
+        return raw_echo(source)
 
     if not graph.nodes:
-        return _raw_echo(source)
+        return raw_echo(source)
 
     try:
         lines = layout_flowgraph(graph, width)
     except Exception:
-        return _raw_echo(source)
+        return raw_echo(source)
 
     if not lines:
-        return _raw_echo(source)
+        return raw_echo(source)
 
     return lines
-
-
-def _raw_echo(source: str) -> list[str]:
-    return [_GLYPH_RANGE_RE.sub("?", line.rstrip()) for line in source.splitlines()]

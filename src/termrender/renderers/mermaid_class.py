@@ -1,10 +1,9 @@
 """Native renderer for mermaid ``classDiagram`` sources.
 
-Standalone module: exposes a single pure function, :func:`render_class`.
-Not wired into ``mermaid.py``'s dispatcher (a later, orchestrator-owned
-phase) — nothing in this package imports it. Own parser, own tests, no
-dependency on ``Block`` or the render pipeline, matching the shape of
-``mermaid_sequence.py`` and ``mermaid_flow.py``.
+Wired into ``mermaid.py``'s dispatcher: exposes a single pure function,
+:func:`render_class`. Own parser, own tests, no dependency on ``Block``
+or the render pipeline, matching the shape of ``mermaid_sequence.py``
+and ``mermaid_flow.py``.
 
 This module does no layout or rasterization of its own. It parses mermaid
 ``classDiagram`` source into the *same* :class:`~termrender.renderers.
@@ -53,7 +52,8 @@ Grammar supported
   centers this single combined label on the edge's longest straight run;
   the UML convention of a cardinality glyph pinned at each endpoint
   separately isn't supported (see *Known degradations*).
-- ``%%`` comments are dropped.
+- ``%%`` comments and well-formed presentational directives (``classDef``/
+  ``style``/``cssClass``/``accTitle``/``accDescr``) are dropped.
 
 Never crashes: any unparseable input (missing header, or a parse/layout
 exception) degrades to a **raw echo** of the source lines with no
@@ -68,8 +68,9 @@ Known degradations (by design, not bugs)
   (per-endpoint cardinality glyphs, common in dedicated UML tools) — the
   underlying engine places one label per edge.
 - ``note`` statements, `<<...>>` generic constraints beyond the ``~T~``
-  substitution, and class-diagram namespaces are not recognized — lines
-  using them are silently dropped (best-effort parsing, never raised).
+  substitution, and class-diagram namespaces are not recognized; they
+  raise ``ClassDiagramError`` and the public renderer raw-echoes instead
+  of half-rendering the diagram.
 - See ``mermaid_flow_layout.py``'s docstring for the inherited engine
   degradations (dense-graph crossings, CJK wrap width, minimum-box-size
   cosmetics) — this renderer's output goes through the same rasterizer and
@@ -80,6 +81,7 @@ from __future__ import annotations
 
 import re
 
+from termrender.renderers.mermaid_degradation import raw_echo
 from termrender.renderers.mermaid_flow_layout import layout_flowgraph
 from termrender.renderers.mermaid_flow_model import (
     Direction,
@@ -105,6 +107,21 @@ class ClassDiagramError(Exception):
 _HEADER_RE = re.compile(r"^classDiagram(?:-v2)?\b", re.IGNORECASE)
 _DIRECTION_RE = re.compile(r"^direction\s+(TB|TD|LR|RL|BT)\b", re.IGNORECASE)
 _COMMENT_RE = re.compile(r"^%%")
+_CLASSDEF_RE = re.compile(r"^classDef\b\s+\S+\s+\S.*$", re.IGNORECASE)
+_STYLE_RE = re.compile(r"^style\b\s+\S+\s+\S.*$", re.IGNORECASE)
+_CSSCLASS_RE = re.compile(
+    r'^cssClass\b\s+(?:"[^"]+"|\S+)(?:\s*,\s*(?:"[^"]+"|\S+))*\s+\S+\s*$',
+    re.IGNORECASE,
+)
+_ACCTITLE_RE = re.compile(r"^accTitle\b\s*:?\s+\S.*$", re.IGNORECASE)
+_ACCDESCR_RE = re.compile(r"^accDescr\b\s*:?\s+\S.*$", re.IGNORECASE)
+_CLASS_ASSIGN_RE = re.compile(
+    r"^class\b\s+(?:\S+(?:\s*,\s*\S+)*)\s+(?!\{)\S+\s*$", re.IGNORECASE
+)
+_CLASS_SHORTHAND_RE = re.compile(r"^class\b\s+\S+:::\S+\s*$", re.IGNORECASE)
+_BODY_DIRECTIVE_RE = re.compile(
+    r"^(?:classDef|class|style|cssClass|accTitle|accDescr)\b", re.IGNORECASE
+)
 
 _CLASS_OPEN_RE = re.compile(r"^class\s+(\S+)\s*\{(.*)$")
 _CLASS_BARE_RE = re.compile(r"^class\s+(\S+)\s*$")
@@ -123,8 +140,6 @@ _REL_LEFT_RE = re.compile(r'^\s*(?P<id>[^\s"]+)\s*(?:"(?P<card>[^"]*)")?\s*$')
 _REL_RIGHT_RE = re.compile(
     r'^\s*(?:"(?P<card>[^"]*)")?\s*(?P<id>[^\s":]+)\s*(?::\s*(?P<label>.*))?$'
 )
-
-_GLYPH_RANGE_RE = re.compile("[\u2500-\u259f\u25a0-\u25ff]")
 
 
 class _ClassDef:
@@ -171,6 +186,31 @@ def _get_or_create(classes: dict[str, _ClassDef], token: str) -> _ClassDef:
     elif "~" in token:
         cls.display_name = _format_generics(token)
     return cls
+
+
+def _is_presentational_line(line: str) -> bool:
+    return any(
+        regex.match(line)
+        for regex in (
+            _CLASSDEF_RE,
+            _STYLE_RE,
+            _CSSCLASS_RE,
+            _ACCTITLE_RE,
+            _ACCDESCR_RE,
+            _CLASS_ASSIGN_RE,
+            _CLASS_SHORTHAND_RE,
+        )
+    )
+
+
+def _consume_block_text(cls: _ClassDef, text: str) -> None:
+    for part in text.split(";"):
+        part = part.strip()
+        if part and _BODY_DIRECTIVE_RE.match(part):
+            raise ClassDiagramError(
+                f"unrecognized class diagram statement: {part!r}"
+            )
+    _consume_members(cls, text)
 
 
 def _consume_members(cls: _ClassDef, text: str) -> None:
@@ -271,11 +311,15 @@ def _build_graph(source: str) -> FlowGraph:
             continue
 
         if block_cls is not None:
+            if _COMMENT_RE.match(line):
+                continue
             if line.endswith("}"):
-                _consume_members(block_cls, line[:-1])
+                body = line[:-1].rstrip()
+                if body:
+                    _consume_block_text(block_cls, body)
                 block_cls = None
             else:
-                _consume_members(block_cls, line)
+                _consume_block_text(block_cls, line)
             continue
 
         if not seen_header:
@@ -283,7 +327,7 @@ def _build_graph(source: str) -> FlowGraph:
                 seen_header = True
             continue
 
-        if _COMMENT_RE.match(line):
+        if _COMMENT_RE.match(line) or _is_presentational_line(line):
             continue
 
         dm = _DIRECTION_RE.match(line)
@@ -299,9 +343,9 @@ def _build_graph(source: str) -> FlowGraph:
             cls.has_block = True
             body = inline_body.rstrip()
             if body.endswith("}"):
-                _consume_members(cls, body[:-1])
+                _consume_block_text(cls, body[:-1])
             else:
-                _consume_members(cls, body)
+                _consume_block_text(cls, body)
                 block_cls = cls
             continue
 
@@ -326,7 +370,13 @@ def _build_graph(source: str) -> FlowGraph:
             _consume_members(cls, mm.group("member"))
             continue
 
-        # Unrecognized line: consumed silently, best-effort.
+        if _CLASS_ASSIGN_RE.match(line) or _CLASS_SHORTHAND_RE.match(line):
+            continue
+
+        raise ClassDiagramError(f"unrecognized class diagram statement: {line!r}")
+
+    if block_cls is not None:
+        raise ClassDiagramError("unterminated class body")
 
     if not seen_header:
         raise ClassDiagramError(
@@ -354,12 +404,6 @@ def _build_graph(source: str) -> FlowGraph:
     return FlowGraph(direction=direction, nodes=nodes, edges=edges, subgraphs=[])
 
 
-def _raw_echo(source: str) -> list[str]:
-    return [
-        _GLYPH_RANGE_RE.sub("?", line.rstrip()) for line in source.splitlines()
-    ]
-
-
 def render_class(source: str, width: int) -> list[str]:
     """Render a mermaid ``classDiagram`` source to unicode lines.
 
@@ -381,17 +425,17 @@ def render_class(source: str, width: int) -> list[str]:
     try:
         graph = _build_graph(source)
     except ClassDiagramError:
-        return _raw_echo(source)
+        return raw_echo(source)
 
     if not graph.nodes:
-        return _raw_echo(source)
+        return raw_echo(source)
 
     try:
         lines = layout_flowgraph(graph, width)
     except Exception:
-        return _raw_echo(source)
+        return raw_echo(source)
 
     if not lines:
-        return _raw_echo(source)
+        return raw_echo(source)
 
     return lines

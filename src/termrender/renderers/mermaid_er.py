@@ -1,10 +1,10 @@
 """Native renderer for mermaid ``erDiagram`` sources.
 
-Standalone module: exposes a single pure function, :func:`render_er`. Not
-wired into ``mermaid.py``'s dispatcher (a later, orchestrator-owned phase)
-— nothing in this package imports it. Own parser, own tests, no dependency
-on ``Block`` or the render pipeline, matching the shape of
-``mermaid_class.py`` and ``mermaid_flow.py``.
+Standalone module: exposes a single pure function, :func:`render_er`.
+Wired into ``mermaid.py``'s dispatcher alongside the other native mermaid
+renderers. Own parser, own tests, no dependency on ``Block`` or the render
+pipeline, matching the shape of ``mermaid_class.py`` and
+``mermaid_flow.py``.
 
 This module does no layout or rasterization of its own. It parses mermaid
 ``erDiagram`` source into the *same* :class:`~termrender.renderers.
@@ -96,6 +96,7 @@ from __future__ import annotations
 
 import re
 
+from termrender.renderers.mermaid_degradation import raw_echo
 from termrender.renderers.mermaid_flow_layout import layout_flowgraph
 from termrender.renderers.mermaid_flow_model import (
     Direction,
@@ -120,12 +121,14 @@ class ERDiagramError(Exception):
 
 _HEADER_RE = re.compile(r"^erDiagram\b", re.IGNORECASE)
 _COMMENT_RE = re.compile(r"^%%")
+_ACC_RE = re.compile(r"^acc(?:Title|Descr)\b", re.IGNORECASE)
 
 # An entity token: a quoted name (optionally aliased, `"Order Item"[OI]`),
 # or a bare run of non-space/non-brace characters (`CUSTOMER`, `p[Person]`,
 # `LINE-ITEM`). Used for bare declarations, block openers, and relationship
-# endpoints alike (see `_parse_entity_token`).
-_ENTITY_TOKEN = r'"[^"]*"(?:\[[^\]]*\])?|[^\s{]+'
+# endpoints alike (see `_parse_entity_token`). Bare runs exclude `}` so a
+# stray block closer can never be mistaken for an entity.
+_ENTITY_TOKEN = r'"[^"]*"(?:\[[^\]]*\])?|[^\s{}]+'
 
 _ENTITY_TOKEN_RE = re.compile(r'^(?P<id>"[^"]*"|[^\[\s]+)(?:\[(?P<alias>[^\]]*)\])?$')
 _BLOCK_OPEN_RE = re.compile(rf"^(?P<idtok>{_ENTITY_TOKEN})\s*\{{(?P<inline>.*)$")
@@ -150,8 +153,6 @@ _RIGHT_CARD = r"o\||\|\||o\{|\|\{"
 _REL_OP_RE = re.compile(rf"(?P<left>{_LEFT_CARD})(?P<mid>--|\.\.)(?P<right>{_RIGHT_CARD})")
 _REL_LEFT_RE = re.compile(rf"^\s*(?P<idtok>{_ENTITY_TOKEN})\s*$")
 _REL_RIGHT_RE = re.compile(rf"^\s*(?P<idtok>{_ENTITY_TOKEN})\s*(?::\s*(?P<label>.*))?$")
-
-_GLYPH_RANGE_RE = re.compile("[\u2500-\u259f\u25a0-\u25ff]")
 
 # Crow's-foot pair -> cardinality text, read from mermaid's own vocabulary
 # (both writing directions map to the same text on the side they sit next
@@ -221,9 +222,8 @@ def _format_attr_row(m: re.Match[str]) -> str:
 def _consume_attrs(entity: _Entity, text: str) -> None:
     """Split ``text`` (one physical line, or the inline body of an
     ``ENTITY { ... }`` opener/closer) on ``;`` into individual attribute
-    statements and file each into ``entity``. An attribute that doesn't
-    match the ``type name [keys] [comment]`` grammar is dropped silently
-    (best-effort, never raised)."""
+    statements and file each into ``entity``. Any non-empty part that does
+    not match the ``type name [keys] [comment]`` grammar raises."""
     for part in text.split(";"):
         part = part.strip()
         if not part:
@@ -231,6 +231,8 @@ def _consume_attrs(entity: _Entity, text: str) -> None:
         m = _ATTR_RE.match(part)
         if m:
             entity.attrs.append(_format_attr_row(m))
+        else:
+            raise ERDiagramError(f"unrecognized ER entity attribute: {part!r}")
 
 
 def _try_relation(
@@ -273,7 +275,13 @@ def _try_relation(
 def _build_graph(source: str) -> FlowGraph:
     lines = source.splitlines()
     sniff_lines = strip_prelude_lines(lines)
-    first = next((line.strip() for line in sniff_lines if line.strip()), "")
+    first = ""
+    for sniff_line in sniff_lines:
+        stripped = sniff_line.strip()
+        if not stripped or _COMMENT_RE.match(stripped) or _ACC_RE.match(stripped):
+            continue
+        first = stripped
+        break
     if not _HEADER_RE.match(first):
         raise ERDiagramError(
             "not a mermaid ER diagram: source must start with 'erDiagram'"
@@ -289,6 +297,9 @@ def _build_graph(source: str) -> FlowGraph:
         if not line:
             continue
 
+        if _COMMENT_RE.match(line) or _ACC_RE.match(line):
+            continue
+
         if block_entity is not None:
             if line.endswith("}"):
                 _consume_attrs(block_entity, line[:-1])
@@ -300,10 +311,8 @@ def _build_graph(source: str) -> FlowGraph:
         if not seen_header:
             if _HEADER_RE.match(line):
                 seen_header = True
-            continue
-
-        if _COMMENT_RE.match(line):
-            continue
+                continue
+            raise ERDiagramError(f"unrecognized ER diagram statement: {line!r}")
 
         om = _BLOCK_OPEN_RE.match(line)
         if om:
@@ -325,7 +334,10 @@ def _build_graph(source: str) -> FlowGraph:
             _get_or_create(entities, bm.group("idtok"))
             continue
 
-        # Unrecognized line: consumed silently, best-effort.
+        raise ERDiagramError(f"unrecognized ER diagram statement: {line!r}")
+
+    if block_entity is not None:
+        raise ERDiagramError("unterminated entity block")
 
     if not seen_header:
         raise ERDiagramError(
@@ -345,10 +357,6 @@ def _build_graph(source: str) -> FlowGraph:
         )
 
     return FlowGraph(direction=Direction.TB, nodes=nodes, edges=edges, subgraphs=[])
-
-
-def _raw_echo(source: str) -> list[str]:
-    return [_GLYPH_RANGE_RE.sub("?", line.rstrip()) for line in source.splitlines()]
 
 
 def render_er(source: str, width: int) -> list[str]:
@@ -372,17 +380,17 @@ def render_er(source: str, width: int) -> list[str]:
     try:
         graph = _build_graph(source)
     except ERDiagramError:
-        return _raw_echo(source)
+        return raw_echo(source)
 
     if not graph.nodes:
-        return _raw_echo(source)
+        return raw_echo(source)
 
     try:
         lines = layout_flowgraph(graph, width)
     except Exception:
-        return _raw_echo(source)
+        return raw_echo(source)
 
     if not lines:
-        return _raw_echo(source)
+        return raw_echo(source)
 
     return lines

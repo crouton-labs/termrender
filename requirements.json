@@ -112,7 +112,7 @@
           "title": "Mermaid code blocks",
           "ears": {
             "when": "When the input contains a fenced code block with language 'mermaid'",
-            "shall": "the system shall parse the mermaid syntax and render it as an ASCII/Unicode flowchart inline with surrounding content, using mermaid-ascii as the rendering backend"
+            "shall": "the system shall parse the mermaid syntax and render it as an ASCII/Unicode flowchart inline with surrounding content, using termrender's own native Python parsers (no external mermaid rendering dependency)"
           },
           "criteria": [
             {
@@ -136,12 +136,12 @@
               "checked": false
             },
             {
-              "text": "mermaid-ascii is used as a Python dependency, not shelled out to",
+              "text": "diagrams are parsed and rendered in-process by native Python parsers, with no subprocess or vendored binary dependency",
               "checked": false
             }
           ],
           "status": "draft",
-          "agentNotes": "Revised per review — since this is a Python package, we use mermaid-ascii directly as a library dependency. No subprocess overhead, no Python runtime concern. Sequence diagram support depends on what mermaid-ascii supports.",
+          "agentNotes": "Each mermaid diagram type has its own native Python parser in renderers/ (mermaid_flow_parser.py, mermaid_class.py, mermaid_state.py, mermaid_er.py, plus dedicated pie/gantt/sequence/mindmap/journey/timeline modules); the flowchart/class/state/ER parsers share one grandalf-based Sugiyama layout engine via a common FlowGraph model.",
           "userNotes": "User: 'We're going to make this a python package, so it's okay if it has python deps'",
           "questions": [],
           "startedAt": "2026-04-05T03:25:14.714Z",
@@ -479,7 +479,7 @@
           "title": "Standalone Python package",
           "ears": {
             "while": "While the package is distributed",
-            "shall": "the system shall be a standalone Python package on PyPI, installable independently of sisyphus, with mermaid-ascii and a markdown parser as its primary dependencies"
+            "shall": "the system shall be a standalone Python package on PyPI, installable independently of sisyphus, with mistune (markdown) and grandalf (graph layout for native mermaid rendering) as its primary dependencies"
           },
           "criteria": [
             {
@@ -491,7 +491,7 @@
               "checked": false
             },
             {
-              "text": "Dependencies: mermaid-ascii, markdown parser (mistune or markdown-it-py), Rich (for ANSI primitives)",
+              "text": "Dependencies: mistune (markdown parsing), grandalf (graph layout), pygments (syntax highlighting)",
               "checked": false
             },
             {
@@ -500,7 +500,7 @@
             }
           ],
           "status": "draft",
-          "agentNotes": "Revised per review — Python package on PyPI instead of npm. mermaid-ascii is a direct dependency. Rich can be used for low-level ANSI output (colors, styles) without using its layout/panel system — we build our own layout engine on top.",
+          "agentNotes": "Python package on PyPI. Mermaid diagrams render via termrender's own native parsers plus grandalf for graph layout — no external mermaid rendering dependency.",
           "userNotes": "User: 'It can be python — it doesn't need to be ts'",
           "questions": [
             {

@@ -37,11 +37,17 @@ Homepage = "https://github.com/CaptainCrouton89/termrender"
 Repository = "https://github.com/CaptainCrouton89/termrender"
 Issues = "https://github.com/CaptainCrouton89/termrender/issues"
 
+[dependency-groups]
+dev = ["pytest>=9.0"]
+
 [project.scripts]
 termrender = "termrender.__main__:main"
 
 [tool.hatch.version]
 source = "vcs"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/termrender"]

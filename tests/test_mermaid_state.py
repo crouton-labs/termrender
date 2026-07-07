@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
+from termrender.renderers.mermaid_degradation import raw_echo
 from termrender.renderers.mermaid_state import StateDiagramError, parse, render_state
 
 _BOX_GLYPH_RE = re.compile(r"[\u2500-\u259F\u25A0-\u25FF]")
@@ -283,6 +286,42 @@ def test_nested_composite_states():
     assert inner_right < outer_right
 
 
+def test_presentational_state_lines_are_ignored_and_valid_diagram_still_renders():
+    source = (
+        "stateDiagram-v2\n"
+        "classDef muted fill:#eee,stroke:#999\n"
+        "class A muted\n"
+        "style A fill:#fff,stroke:#333\n"
+        "accTitle: Example Title\n"
+        "accDescr: Example Description\n"
+        "[*] --> A\n"
+        "A --> [*]\n"
+    )
+    lines = render_state(source, width=80)
+    text = "\n".join(lines)
+    assert any(_BOX_GLYPH_RE.search(line) for line in lines)
+    assert "A" in text
+    assert "classDef" not in text
+    assert "accTitle" not in text
+    assert "accDescr" not in text
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "stateDiagram-v2\n[*] --> A\nstyle\nA --> [*]\n",
+        "stateDiagram-v2\n[*] --> A\nclassDef\nA --> [*]\n",
+        "stateDiagram-v2\n[*] --> A\nclass this is not mermaid ┌\nA --> [*]\n",
+        "stateDiagram-v2\n[*] --> A\naccTitle\nA --> [*]\n",
+        "stateDiagram-v2\n[*] --> A\naccDescr\nA --> [*]\n",
+    ],
+)
+def test_malformed_presentational_state_lines_force_raw_echo(source: str):
+    lines = render_state(source, width=80)
+    assert lines == raw_echo(source)
+    assert not any(_BOX_GLYPH_RE.search(line) for line in lines)
+
+
 # --------------------------------------------------------------------------
 # Notes
 # --------------------------------------------------------------------------
@@ -410,6 +449,20 @@ def test_malformed_source_with_literal_glyph_is_still_sanitized():
     assert "?" in lines[0]
 
 
+def test_unrecognized_body_line_forces_raw_echo():
+    source = "stateDiagram-v2\n[*] --> Idle\nunsupported line \u250c\n"
+    lines = render_state(source, width=80)
+    assert lines == raw_echo(source)
+    assert not any(_BOX_GLYPH_RE.search(line) for line in lines)
+
+
+def test_unterminated_composite_with_content_forces_raw_echo():
+    source = "stateDiagram-v2\nstate S {\n[*] --> A\n"
+    lines = render_state(source, width=80)
+    assert lines == raw_echo(source)
+    assert not any(_BOX_GLYPH_RE.search(line) for line in lines)
+
+
 # --------------------------------------------------------------------------
 # Never crashes
 # --------------------------------------------------------------------------
@@ -435,15 +488,13 @@ def test_start_to_end_direct_transition_renders_both_markers():
 
 
 def test_unterminated_composite_with_no_members_is_a_zero_node_echo():
-    # `state X {` with nothing inside and no closing `}` auto-closes at
-    # EOF into an empty Subgraph — since X itself is never referenced by a
-    # transition, no FlowNode is ever created, so this degenerates to the
-    # same zero-node echo case as an empty body (not a crash, not a
-    # half-rendered diagram).
+    # A lone unterminated composite now forces the parse error path; the
+    # source still raw-echoes with no box glyphs because there are no
+    # renderable states to draw.
     source = "stateDiagram-v2\nstate X {\n"
     lines = render_state(source, width=80)
     assert not any(_BOX_GLYPH_RE.search(line) for line in lines)
-    assert lines == ["stateDiagram-v2", "state X {"]
+    assert lines == raw_echo(source)
 
 
 def test_unterminated_note_block_still_attaches_at_eof():
@@ -455,13 +506,11 @@ def test_unterminated_note_block_still_attaches_at_eof():
     assert "unterminated note" in text
 
 
-def test_stray_close_brace_is_dropped_and_rest_of_diagram_still_renders():
+def test_stray_close_brace_forces_raw_echo():
     source = "stateDiagram-v2\n}\n[*] --> A\n"
     lines = render_state(source, width=80)
-    text = "\n".join(lines)
-    assert any(_BOX_GLYPH_RE.search(line) for line in lines)
-    assert _START_GLYPH in text
-    assert "A" in text
+    assert lines == raw_echo(source)
+    assert not any(_BOX_GLYPH_RE.search(line) for line in lines)
 
 
 def test_wholly_empty_source_echoes_as_empty():

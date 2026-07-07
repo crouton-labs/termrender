@@ -388,14 +388,13 @@ def test_nested_subgraphs():
     assert inner.node_ids == ["B"]
 
 
-def test_unterminated_subgraph_auto_closes():
+def test_unterminated_subgraph_raises():
     src = """graph TD
     subgraph s1
     A
     """
-    g = parse(src)
-    assert len(g.subgraphs) == 1
-    assert g.subgraphs[0].node_ids == ["A"]
+    with pytest.raises(FlowchartError):
+        parse(src)
 
 
 # --------------------------------------------------------------------------
@@ -411,10 +410,36 @@ def test_class_classdef_style_click_linkstyle_leave_no_trace():
     style A fill:#fff
     click A "http://example.com"
     linkStyle 0 stroke:#f00
+    accTitle Demo title
+    accDescr Demo description
+    accTitle: Demo title
+    accDescr: Demo description
     """
     g = parse(src)
     assert [n.id for n in g.nodes] == ["A", "B"]
     assert len(g.edges) == 1
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "class",
+        "class A",
+        "classDef",
+        "classDef important",
+        "style",
+        "style A",
+        "click",
+        "click A",
+        "linkStyle",
+        "linkStyle 0",
+        "accTitle",
+        "accDescr",
+    ],
+)
+def test_incomplete_presentational_directives_raise(line):
+    with pytest.raises(FlowchartError):
+        parse(f"graph TD\nA-->B\n{line}\n")
 
 
 def test_comment_lines_dropped():
@@ -424,20 +449,18 @@ def test_comment_lines_dropped():
 
 
 # --------------------------------------------------------------------------
-# Malformed body degrades without raising
+# Malformed body raises
 # --------------------------------------------------------------------------
 
 
-def test_malformed_body_line_dropped_silently():
-    g = parse("graph TD\nA-->B\n@@@not valid mermaid at all###\n")
-    assert [n.id for n in g.nodes] == ["A", "B"]
-    assert len(g.edges) == 1
+def test_malformed_body_line_raises():
+    with pytest.raises(FlowchartError):
+        parse("graph TD\nA-->B\n@@@not valid mermaid at all###\n")
 
 
-def test_stray_end_with_nothing_open_is_ignored():
-    g = parse("graph TD\nA-->B\nend\n")
-    assert g.subgraphs == []
-    assert [n.id for n in g.nodes] == ["A", "B"]
+def test_stray_end_with_nothing_open_raises():
+    with pytest.raises(FlowchartError):
+        parse("graph TD\nA-->B\nend\n")
 
 
 def test_empty_body_returns_no_nodes():

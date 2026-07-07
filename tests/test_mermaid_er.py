@@ -360,3 +360,39 @@ def test_render_er_never_raises_on_garbage():
         'erDiagram\nA { string "unterminated PK\n',
     ):
         render_er(garbage, 80)  # must not raise
+
+
+def test_unrecognized_er_body_line_forces_raw_echo():
+    src = "erDiagram\nCUSTOMER ||--o{ ORDER : places\nTHIS IS BROKEN ┌"
+    lines = _lines(src)
+    assert lines == [
+        "erDiagram",
+        "CUSTOMER ||--o{ ORDER : places",
+        "THIS IS BROKEN ?",
+    ]
+    assert not _has_box_glyphs(lines)
+
+
+def test_stray_er_close_brace_line_forces_raw_echo():
+    src = "erDiagram\n}\n"
+    lines = _lines(src)
+    assert lines == ["erDiagram", "}"]
+    assert not _has_box_glyphs(lines)
+
+
+def test_stray_er_close_brace_after_relationship_forces_raw_echo():
+    src = "erDiagram\nCUSTOMER ||--o{ ORDER : places\n}\n"
+    lines = _lines(src)
+    assert lines == [
+        "erDiagram",
+        "CUSTOMER ||--o{ ORDER : places",
+        "}",
+    ]
+    assert not _has_box_glyphs(lines)
+
+
+def test_unterminated_er_entity_block_forces_raw_echo():
+    src = "erDiagram\nA {\nstring id"
+    lines = _lines(src)
+    assert lines == ["erDiagram", "A {", "string id"]
+    assert not _has_box_glyphs(lines)
