@@ -1,6 +1,38 @@
 # CHANGELOG
 
 
+## v4.10.0 (2026-07-07)
+
+### Features
+
+- **mermaid**: Native dispatch for flowchart/class/state/er, drop vendored Go binary
+  ([`6935f30`](https://github.com/crouton-labs/termrender/commit/6935f30a1dccfefcc34344de02191f8481d53668))
+
+Wire the four previously-unwired native renderers into mermaid.py's first-line dispatcher:
+  flowchart/graph -> mermaid_flow.render_flowchart, classDiagram -> mermaid_class.render_class,
+  stateDiagram/-v2 -> mermaid_state.render_state, erDiagram -> mermaid_er.render_er. Every mermaid
+  type termrender renders is now native Python; no diagram type shells out anymore.
+
+Unrecognized/exotic types (sankey, C4, gitgraph, block, packet, kanban, quadrantChart, ...) degrade
+  in the dispatcher itself to a raw echo of the source with box-drawing/geometric glyphs stripped,
+  preserving the contract the crouter attach viewer relies on to detect render failure by glyph
+  absence.
+
+Delete the vendored Go path entirely: src/termrender/_bin/ (binary), src/termrender/_mermaid_bin.py,
+  scripts/build-mermaid-ascii.sh, the mermaid-ascii runtime dependency and hatch artifacts stanza in
+  pyproject.toml (relocked via uv.lock), and scripts/mermaid_flow_parity.py (a standalone dev-only
+  harness comparing native output against the now-deleted binary).
+
+tests/test_mermaid_compat.py pinned Go-era preprocessing (preprocess_mermaid_for_ascii) that no
+  longer exists; deleted wholesale since dispatch/prelude contracts it also touched already live in
+  test_mermaid_dispatch.py. That file's routing tests are updated for the four newly-wired types and
+  gain dispatch tests for the exotic raw-echo path (including a no-native-renderer-called assertion
+  and a glyph-range sweep pinning the no-box-glyph contract).
+
+Swept src/termrender/renderers/CLAUDE.md and README.md to current-state only; no remaining
+  references to mermaid-ascii/_mermaid_bin/the Go binary anywhere in the tree.
+
+
 ## v4.9.1 (2026-07-07)
 
 ### Bug Fixes
