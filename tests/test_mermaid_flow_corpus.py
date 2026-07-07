@@ -266,7 +266,7 @@ def test_multi_parent_dag_golden():
 
 
 # --------------------------------------------------------------------------
-# Cycle with a labeled back-edge — the exact case that panics the Go binary
+# Cycle with a labeled back-edge — a known-tricky layout case for the renderer
 # --------------------------------------------------------------------------
 
 
@@ -290,7 +290,7 @@ def test_labeled_back_edge_cycle_golden():
     text = "\n".join(lines)
     # Belt-and-suspenders topology assertions alongside the golden: every
     # box present, the label present, and an arrowhead landing on A (the
-    # back-edge's destination) — the exact shape the Go binary panics on.
+    # back-edge's destination) — the layout shape this case must produce.
     for label in ("A", "B", "C"):
         assert label in text
     assert "retry" in text

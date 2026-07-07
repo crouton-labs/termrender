@@ -195,7 +195,7 @@ def test_cycle_lays_out_without_hanging():
 
 
 def test_labeled_back_edge_cycle_does_not_crash():
-    # The exact shape that panics the Go binary: a labeled back-edge. Real
+    # A labeled back-edge — the renderer must lay this out cleanly. Real
     # assertions: the "retry" label itself survives, an arrowhead lands,
     # and the forward chain's top-to-bottom order is unaffected by the
     # back-edge — a renderer that silently dropped the labeled back-edge
