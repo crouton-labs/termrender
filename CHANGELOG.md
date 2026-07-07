@@ -1,6 +1,39 @@
 # CHANGELOG
 
 
+## v4.10.4 (2026-07-07)
+
+### Bug Fixes
+
+- **mermaid-flow**: Separate labels around crowded junctions
+  ([`c089c6f`](https://github.com/crouton-labs/termrender/commit/c089c6fd42ef079a3e6d33b6d78f4978f12c9ccf))
+
+Multiple labeled edges converging or diverging on one node (a stateDiagram/flowchart junction with
+  several labeled transitions) used to collide: a Z-path's jog segment can be much shorter than its
+  own label text, and every edge crossing the same two ranks shares one default jog row, so labels
+  fused onto each other, fused onto a box border, or were silently dropped by the reserved-cell
+  fallback.
+
+- Widen a horizontal label's search window to the row's real clear span
+  (_row_clear_span/_cell_blocks_label), not just its own short segment, treating sibling connector
+  lines and already-placed labels as blocking alongside box borders. - Give each labeled forward
+  edge crossing a shared inter-rank band its own jog row (_forward_row_overrides), with the band
+  pre-widened by count (_rank_gap_overrides), instead of stacking every sibling on one row. - Clamp
+  _label_positions to its [lo, hi] run so a vertical-segment search can no longer wander past its
+  own span into blank rows below the whole diagram. - Exempt only genuine bend corners (not
+  arrowhead-adjacent anchors) from the label placement buffer, and broaden _spread_group_anchors to
+  treat a labeled edge as needing anchor spread, not just a marked one.
+
+Regression tests added for the engine (multiple labeled edges converging/ diverging on one node) and
+  the stateDiagram adversarial repro; smoke tests for a flowchart decision node's labeled
+  fan-in/fan-out and a class diagram with multiple labeled UML relationships around one class.
+
+### Testing
+
+- **mermaid**: Rephrase native regression comments
+  ([`011bcf2`](https://github.com/crouton-labs/termrender/commit/011bcf2f2fb3b50699a98d295f3b7371c2b92f9f))
+
+
 ## v4.10.3 (2026-07-07)
 
 ### Bug Fixes
