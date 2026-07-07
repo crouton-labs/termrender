@@ -420,20 +420,18 @@ def test_render_class_never_raises_on_garbage():
 
 
 # --------------------------------------------------------------------------
-# Back-edge label crossing sibling boxes (regression: a back-edge's C-path
-# routed its lane column just past its own two endpoints' extent, not past
-# every node in the diagram, so its horizontal exit leg — which travels
-# along its source's own rank row, a row every rank-mate box also occupies
-# — ran alongside (and its label landed inside) whichever sibling boxes sat
-# between the source and the lane column)
+# Back-edge labels are placed outside all node rects: a back-edge's
+# horizontal exit leg travels along its source's own rank row, a row every
+# rank-mate box also occupies, so the label must clear every sibling in
+# that rank, not just the edge's own source and destination.
 # --------------------------------------------------------------------------
 
 
 def test_back_edge_label_does_not_cross_sibling_boxes():
     # Hub fans out to six children; Alpha alone routes a labeled edge back
     # into Hub. Alpha's rank has five siblings (Beta..Eff) to its right —
-    # exactly the crowded-rank shape that let the back-edge's return leg
-    # run straight through Beta's and Cee's box interiors.
+    # the crowded-rank shape that exercises the lane clearing every
+    # sibling's box, not just Alpha's and Hub's.
     src = (
         "classDiagram\n"
         "    Hub --> Alpha : extends\n"
@@ -471,9 +469,8 @@ def test_back_edge_label_does_not_cross_sibling_boxes():
         overlap = label_cells & box_cells
         assert not overlap, f"'returns' label overlaps {node_id}'s box at {overlap}: {lines!r}"
 
-    # Every sibling node name must survive intact — not fused with the
-    # back-edge's label onto one run-together line (the literal defect:
-    # "BetareturnsCee").
+    # Every sibling node name must survive intact, on its own line, not
+    # fused with the back-edge's label onto one run-together line.
     for name in ("Alpha", "Beta", "Cee", "Dee", "Eee", "Eff", "Hub"):
         assert name in text
     for r, line in enumerate(lines):

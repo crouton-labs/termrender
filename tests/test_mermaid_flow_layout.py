@@ -589,12 +589,10 @@ def test_multiple_labeled_edges_diverge_and_converge_on_one_node():
 
 
 # --------------------------------------------------------------------------
-# Back-edge return leg crossing sibling boxes in the source's own crowded
-# rank (regression: a back-edge's C-path lane column was sized from just
-# its own two endpoints, not every node in the graph, so its horizontal
-# exit leg — which travels along the source's own rank row, a row every
-# rank-mate box also occupies — could run alongside, and its label land
-# inside, whichever sibling boxes sat between the source and the lane)
+# Back-edge return legs clear every sibling box in the source's own rank:
+# a back-edge's horizontal exit leg travels along the source's own rank
+# row, a row every rank-mate box also occupies, so its lane column must
+# reach past every node in that rank, not just the edge's own endpoints.
 # --------------------------------------------------------------------------
 
 
@@ -628,8 +626,8 @@ def test_back_edge_return_leg_clears_source_rank_siblings():
         overlap = label_cells & cells
         assert not overlap, f"'returns' label overlaps {node_id}'s box at {overlap}: {lines!r}"
 
-    # Every sibling name must survive intact, not fused into one run-together
-    # line with the back-edge's label (the literal defect: "BetareturnsCee").
+    # Every sibling name must survive intact, on its own line, not fused
+    # into one run-together line with the back-edge's label.
     for name in ["Hub"] + child_ids:
         assert name in text
     for r, line in enumerate(lines):

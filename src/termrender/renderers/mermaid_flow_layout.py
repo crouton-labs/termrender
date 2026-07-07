@@ -1780,8 +1780,7 @@ def _lane_offsets(
 ) -> dict[int, int]:
     """Per-back-edge lane-column offset (added atop :func:`_lane_secondary_base`),
     one entry per index into ``edges`` — every back-edge gets an entry, in
-    ``edges``' own encounter order, the same order a plain incrementing
-    counter would have assigned lanes.
+    ``edges``' own encounter order.
 
     Consecutive lanes step apart by ``_LANE_GAP`` by default, but the step
     widens when either edge of the pair carries a label wide enough that
@@ -1791,8 +1790,7 @@ def _lane_offsets(
     no buffer cell left between the two — the vertical-segment analogue of
     :func:`_rank_gap_overrides` widening a rank gap for a labeled forward
     edge's own text. Two back-edges with no labels at all (or labels short
-    enough to fit in the default gap) reproduce the original fixed-step
-    spacing exactly.
+    enough to fit in the default gap) get the fixed ``_LANE_GAP`` step.
     """
     offsets: dict[int, int] = {}
     prev_half = 0
@@ -1823,15 +1821,15 @@ def _lane_secondary_base(direction: Direction, rects: dict[str, BoxRect]) -> int
     along its own src/dst boxes' own rank-band rows (the off-axis-*rank*
     coordinate — the primary axis here is the off-axis, not the rank axis;
     see :func:`_abstract`), which any sibling node sharing that same band
-    (every other node in the same rank) also occupies. Basing the lane on
-    only the edge's own two boxes leaves the lane column short of a wider
-    sibling in that rank, so the C-path's own corner would land inside —
-    or its legs would sweep across — that sibling's box. Since every
-    back-edge already shares one global lane-offset sequence (see
-    :func:`_lane_offsets`, stacking lanes across the *whole* diagram, not
-    per edge pair), reaching past the whole diagram's own far edge here is
-    the same scope the stacking mechanism already assumes, not a new
-    one."""
+    (every other node in the same rank) also occupies. The lane clears
+    the far edge of every placed node, so back-edge legs and labels never
+    cross node rects — not just the far edge of the one back-edge's own
+    src/dst boxes, which would leave the lane short of a wider sibling in
+    that rank. Since every back-edge already shares one global
+    lane-offset sequence (see :func:`_lane_offsets`, stacking lanes
+    across the *whole* diagram, not per edge pair), reaching past the
+    whole diagram's own far edge here is the same scope the stacking
+    mechanism already assumes, not a new one."""
     if not rects:
         return 0
     if _rank_is_horizontal(direction):
@@ -2330,10 +2328,10 @@ def _route_edge_path(
     :func:`_z_path`'s shared-band default — used when this edge's inter-
     rank band is shared with 2+ sibling labeled edges. ``lane_offset``
     (from :func:`_lane_offsets`), used only on the back-edge branch, gives
-    this edge's own lane-column offset instead of a plain per-edge
-    increment — spacing stacked back-edge lanes apart by label width, not
-    just a fixed step. Same-rank edges and self-loops ignore all four (see
-    :func:`_allocate_edge_anchors`'s docstring for why).
+    this edge's own lane-column offset, spacing stacked back-edge lanes
+    apart by label width rather than a fixed step. Same-rank edges and
+    self-loops ignore all four (see :func:`_allocate_edge_anchors`'s
+    docstring for why).
     """
     src_rect = rects.get(edge.src)
     dst_rect = rects.get(edge.dst)
