@@ -1,6 +1,48 @@
 # CHANGELOG
 
 
+## v4.6.1 (2026-07-07)
+
+### Bug Fixes
+
+- **mermaid-flow**: Parse chained edges and bracket-aware tokenization
+  ([`5040b96`](https://github.com/crouton-labs/termrender/commit/5040b967bbe75c70c6d03d57930742ba020e3333))
+
+- Unify edge parsing behind one bracket-depth-aware connector scanner (_scan_connectors) shared with
+  & fan-out splitting and ; statement splitting, replacing the single-connector _EDGE_RE. -
+  CRITICAL: chained edge statements (A-->B-->C) now parse as a sequence of node groups separated by
+  connectors, emitting one edge per adjacent triple instead of dropping the tail after the first
+  connector. - MAJOR: connector-looking text inside [], (), {} labels (A[Go --> Fast]) is no longer
+  mistaken for an edge connector. - MINOR: semicolons inside labels (A[Check; validate]) no longer
+  split the statement.
+
+Adds structural tests for 2/3-link chains, mixed-style chains, chain with inline label,
+  connector-in-label for all three connector families, and semicolon-in-label. Adds a chained-form
+  golden for the labeled back-edge cycle proving identical render to the separate-line form.
+
+### Testing
+
+- Add flowchart golden corpus and go-binary parity harness
+  ([`2a5a00a`](https://github.com/crouton-labs/termrender/commit/2a5a00aba18195eac987bc8c202a80724d6e43c9))
+
+- tests/test_mermaid_flow_corpus.py: 26 golden-output tests pinning exact render_flowchart() lines
+  across all 9 node shapes, every edge style (solid/dotted/thick/headless/bidirectional), both label
+  forms, & fan-out, a multi-parent DAG, a labeled-back-edge cycle (the case the vendored Go binary
+  panics/mis-parses on), LR vs TD, subgraph + nested subgraph, a long label vs a tight width budget,
+  and the two degradation paths. - scripts/mermaid_flow_parity.py: standalone parity harness (not a
+  pytest dependency) that invokes the vendored Go binary the way termrender's real dispatch path
+  does (preprocess_mermaid_for_ascii + fix_mermaid_encoding) and the native renderer side by side
+  across 14 representative inputs, writing the comparison to the orchestrator's shared context dir.
+  Confirms parity-or-better plus two Go failure modes the native renderer avoids: a self-loop panic
+  (index out of range) and labeled-back-edge mis-parsing (label text swallowed into a phantom node
+  instead of a back-edge). - fix: mermaid_flow.py's module docstring described a stale prior phase
+  ("every shape renders as a plain rectangle", "subgraphs parse but aren't drawn as frames") — both
+  are false now; corrected to describe actual current behavior (distinct shape borders, framed
+  subgraphs with contiguous-membership flattening).
+
+463 tests green (437 pre-existing + 26 new corpus).
+
+
 ## v4.6.0 (2026-07-06)
 
 ### Features
