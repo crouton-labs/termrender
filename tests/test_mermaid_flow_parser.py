@@ -247,6 +247,97 @@ def test_ampersand_inside_label_not_treated_as_fanout():
 
 
 # --------------------------------------------------------------------------
+# Chained edges (`A-->B-->C`)
+# --------------------------------------------------------------------------
+
+
+def test_two_link_chain():
+    g = parse("graph TD\nA-->B-->C\n")
+    assert [n.id for n in g.nodes] == ["A", "B", "C"]
+    assert {(e.src, e.dst) for e in g.edges} == {("A", "B"), ("B", "C")}
+    assert len(g.edges) == 2
+
+
+def test_three_link_chain_with_labeled_back_edge():
+    g = parse("graph TD\nA-->B-->C\nC-->|retry|A\n")
+    assert [n.id for n in g.nodes] == ["A", "B", "C"]
+    ab = _edges(g, "A", "B")[0]
+    bc = _edges(g, "B", "C")[0]
+    ca = _edges(g, "C", "A")[0]
+    assert ab.label is None
+    assert bc.label is None
+    assert ca.label == "retry"
+    assert all(e.style is EdgeStyle.SOLID and e.dst_arrow for e in (ab, bc, ca))
+
+
+def test_chain_with_inline_label_on_one_link():
+    g = parse("graph TD\nA-->B -- go --> C\n")
+    ab = _edges(g, "A", "B")[0]
+    bc = _edges(g, "B", "C")[0]
+    assert ab.label is None
+    assert bc.label == "go"
+
+
+def test_chain_mixing_edge_styles_per_connector():
+    g = parse("graph TD\nA-->B-.->C==>D\n")
+    ab = _edges(g, "A", "B")[0]
+    bc = _edges(g, "B", "C")[0]
+    cd = _edges(g, "C", "D")[0]
+    assert ab.style is EdgeStyle.SOLID
+    assert bc.style is EdgeStyle.DOTTED
+    assert cd.style is EdgeStyle.THICK
+    assert [n.id for n in g.nodes] == ["A", "B", "C", "D"]
+
+
+# --------------------------------------------------------------------------
+# Connector-looking text inside bracketed labels
+# --------------------------------------------------------------------------
+
+
+def test_arrow_connector_inside_rect_label_not_mistaken_for_edge():
+    g = parse("graph TD\nA[Go --> Fast] --> B\n")
+    n = _node(g, "A")
+    assert n.label == "Go --> Fast"
+    assert [n.id for n in g.nodes] == ["A", "B"]
+    assert len(g.edges) == 1
+    assert _edges(g, "A", "B")[0].dst_arrow is True
+
+
+def test_plain_line_connector_inside_rect_label_not_mistaken_for_edge():
+    g = parse("graph TD\nA[one --- two] --> B\n")
+    n = _node(g, "A")
+    assert n.label == "one --- two"
+    assert len(g.edges) == 1
+
+
+def test_dotted_connector_inside_round_label_not_mistaken_for_edge():
+    g = parse("graph TD\nA(Try -.-> Retry) --> B\n")
+    n = _node(g, "A")
+    assert n.label == "Try -.-> Retry"
+    assert len(g.edges) == 1
+
+
+def test_thick_connector_inside_diamond_label_not_mistaken_for_edge():
+    g = parse("graph TD\nA{Fast ==> Track} --> B\n")
+    n = _node(g, "A")
+    assert n.label == "Fast ==> Track"
+    assert len(g.edges) == 1
+
+
+# --------------------------------------------------------------------------
+# Semicolon inside labels
+# --------------------------------------------------------------------------
+
+
+def test_semicolon_inside_rect_label_does_not_split_statement():
+    g = parse("graph TD\nA[Check; validate] --> B\n")
+    n = _node(g, "A")
+    assert n.label == "Check; validate"
+    assert [n.id for n in g.nodes] == ["A", "B"]
+    assert len(g.edges) == 1
+
+
+# --------------------------------------------------------------------------
 # Subgraphs
 # --------------------------------------------------------------------------
 

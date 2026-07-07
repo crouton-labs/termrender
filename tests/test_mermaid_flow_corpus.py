@@ -288,6 +288,34 @@ def test_labeled_back_edge_cycle_golden():
     assert "\u25c0" in text  # ◀ arrowhead into A
 
 
+def test_labeled_back_edge_cycle_chained_form_golden():
+    """Same cycle as `test_labeled_back_edge_cycle_golden`, but the two
+    forward edges are written as one chained statement (`A-->B-->C`)
+    instead of two separate lines — must render identically, proving the
+    chained-edge parser fix preserves the pinned topology/layout."""
+    lines = _lines("graph TD\nA-->B-->C\nC-->|retry|A\n")
+    assert lines == [
+        "    \u250c\u2500\u2500\u2500\u2510",
+        "    \u2502 A \u25c0\u2500\u2510",
+        "    \u2514\u2500\u2500\u2500\u2518 \u2502",
+        "  \u250c\u2500\u2500\u2500\u2518   \u2502",
+        "  \u2502       \u2502",
+        "\u250c\u2500\u25bc\u2500\u2510     \u2502",
+        "\u2502 B \u2502   retry",
+        "\u2514\u2500\u2500\u2500\u2518     \u2502",
+        "  \u2514\u2500\u2500\u2500\u2510   \u2502",
+        "      \u2502   \u2502",
+        "    \u250c\u2500\u25bc\u2500\u2510 \u2502",
+        "    \u2502 C \u2502\u2500\u2518",
+        "    \u2514\u2500\u2500\u2500\u2518",
+    ]
+    text = "\n".join(lines)
+    for label in ("A", "B", "C"):
+        assert label in text
+    assert "retry" in text
+    assert "\u25c0" in text
+
+
 # --------------------------------------------------------------------------
 # LR vs TD of the same graph
 # --------------------------------------------------------------------------

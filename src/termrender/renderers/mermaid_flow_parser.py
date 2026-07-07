@@ -27,9 +27,17 @@ Grammar covered
   pipe form and the inline ``A -- text --> B`` / ``A -. text .-> B`` /
   ``A == text ==> B`` form. ``&`` fan-out (``A & B --> C & D``) expands to
   the full cartesian product of edges, each carrying the shared style/
-  label/arrow flags; the ``&`` splitter is bracket-depth-aware so a literal
-  ``&`` inside a node label (``A[Foo & Bar]``) is not mistaken for fan-out.
-  Empty-string labels (``A -->|| B``) are stored as ``None``.
+  label/arrow flags. A statement may chain any number of connectors
+  (``A-->B-->C``) — this is parsed as a sequence of node groups separated
+  by connectors, emitting one edge per adjacent (group, connector, group)
+  triple, with each connector's own style/label/arrows applied only to the
+  edge it introduces. Connector scanning, ``&`` fan-out splitting, and
+  ``;`` statement splitting are all bracket-depth-aware: a token that looks
+  like a connector, ``&``, or ``;`` but sits inside ``[...]``/``(...)``/
+  ``{...}`` (part of a node label, e.g. ``A[Go --> Fast]`` or
+  ``A[Check; validate]``) is left untouched rather than mistaken for
+  statement structure. Empty-string labels (``A -->|| B``) are stored as
+  ``None``.
 - ``subgraph <id>[ title] ... end``: ``id[title]`` splits into graph key and
   display title; a bare ``subgraph Sub1`` (no brackets) uses the token as
   both id and title. Nesting is a stack: a node declared while a subgraph is
@@ -112,20 +120,19 @@ _SHAPE_PATTERNS: list[tuple[NodeShape, re.Pattern[str]]] = [
     (NodeShape.DIAMOND, re.compile(r"^\{(.*)\}$")),
 ]
 
-# One statement is `left <connector> right`, where <connector> is either the
-# inline dash-label form (odelim ... label ... cdelim) or a bare/pipe-label
-# connector token. `left` is non-greedy so the connector alternation is tried
-# at the earliest position that yields an overall match.
-_EDGE_RE = re.compile(
-    r"^(?P<left>.+?)\s*"
-    r"(?:"
+# A single connector token: either the inline dash-label form
+# (odelim ... label ... cdelim) or a bare/pipe-label connector. This is
+# matched repeatedly (via `_scan_connectors`) against a whole statement to
+# find every TOP-LEVEL occurrence — an edge statement is a sequence of node
+# groups separated by these connectors, so `A-->B-->C` yields two matches
+# and three groups (`A`, `B`, `C`), not one match with a malformed right
+# side.
+_CONNECTOR_RE = re.compile(
     r"(?P<lhead1><)?(?P<odelim>--|-\.|==)\s+(?P<label>.+?)\s+"
     r"(?P<cdelim>-->|---|\.->|\.-|==>|===)"
     r"|"
     r"(?P<lhead2><)?(?P<conn>-\.+->|-\.+-|={2,}>|={3,}|-{2,}>|-{2,})"
     r"(?:\s*\|(?P<plabel>[^|]*)\|)?"
-    r")"
-    r"\s*(?P<right>.+)$"
 )
 
 _OPENERS = set("([{")
@@ -144,9 +151,29 @@ def _norm_label(text: str | None) -> str | None:
     return stripped or None
 
 
-def _split_amp(text: str) -> list[str]:
-    """Split on top-level ``&`` only — a ``&`` nested inside ``[...]``/
-    ``(...)``/``{...}`` (part of a node label) is left untouched."""
+def _bracket_depths(text: str) -> list[int]:
+    """``depths[i]`` = bracket depth immediately before ``text[i]``
+    (``depths[len(text)]`` = depth at end of string). Shared by every
+    top-level scanner below (connector matching, ``&`` splitting, ``;``
+    splitting) to decide whether a candidate token sits inside a node
+    label's ``[...]``/``(...)``/``{...}`` delimiters and should therefore
+    be ignored rather than treated as statement structure."""
+    depths = [0] * (len(text) + 1)
+    depth = 0
+    for i, ch in enumerate(text):
+        depths[i] = depth
+        if ch in _OPENERS:
+            depth += 1
+        elif ch in _CLOSERS:
+            depth = max(0, depth - 1)
+    depths[len(text)] = depth
+    return depths
+
+
+def _split_top_level(text: str, sep: str) -> list[str]:
+    """Split ``text`` on top-level occurrences of the single-character
+    ``sep`` only — a ``sep`` nested inside ``[...]``/``(...)``/``{...}``
+    (part of a node label) is left untouched."""
     parts: list[str] = []
     buf: list[str] = []
     depth = 0
@@ -157,20 +184,49 @@ def _split_amp(text: str) -> list[str]:
         elif ch in _CLOSERS:
             depth = max(0, depth - 1)
             buf.append(ch)
-        elif ch == "&" and depth == 0:
-            parts.append("".join(buf).strip())
+        elif ch == sep and depth == 0:
+            parts.append("".join(buf))
             buf = []
         else:
             buf.append(ch)
-    if buf:
-        parts.append("".join(buf).strip())
-    return [p for p in parts if p]
+    parts.append("".join(buf))
+    return parts
+
+
+def _split_amp(text: str) -> list[str]:
+    """Split on top-level ``&`` only — a ``&`` nested inside ``[...]``/
+    ``(...)``/``{...}`` (part of a node label) is left untouched."""
+    return [p.strip() for p in _split_top_level(text, "&") if p.strip()]
+
+
+def _scan_connectors(text: str) -> list[re.Match[str]]:
+    """Find every top-level (bracket-depth-0) connector match in ``text``,
+    left to right. A candidate match that starts inside ``[...]``/
+    ``(...)``/``{...}`` (i.e. part of a node label such as
+    ``A[Go --> Fast]``) is skipped rather than accepted, and the scan
+    resumes one character past the skipped match's start so a real
+    top-level connector later in the same text is still found."""
+    depths = _bracket_depths(text)
+    matches: list[re.Match[str]] = []
+    pos = 0
+    while pos <= len(text):
+        m = _CONNECTOR_RE.search(text, pos)
+        if not m:
+            break
+        if depths[m.start()] == 0:
+            matches.append(m)
+            pos = m.end()
+        else:
+            pos = m.start() + 1
+    return matches
 
 
 def _iter_statements(lines: list[str]) -> Iterator[str]:
-    """Flatten source lines into ``;``-and-newline-separated statements."""
+    """Flatten source lines into ``;``-and-newline-separated statements,
+    bracket-depth-aware so a ``;`` inside a node label (``A[Check; x]``)
+    does not split the statement in two."""
     for raw in lines:
-        for part in raw.split(";"):
+        for part in _split_top_level(raw, ";"):
             part = part.strip()
             if part:
                 yield part
@@ -263,46 +319,59 @@ def _try_edge(
     edges: list[FlowEdge],
     stack: list[Subgraph],
 ) -> bool:
-    m = _EDGE_RE.match(stmt)
-    if not m:
+    """Parse ``stmt`` as an edge statement: a sequence of node groups
+    separated by top-level connectors (one group for a plain edge, three
+    or more for a chain like ``A-->B-->C``). Emits one (fan-out-expanded)
+    edge per adjacent (group, connector, group) triple, each carrying its
+    own connector's style/label/arrows."""
+    connectors = _scan_connectors(stmt)
+    if not connectors:
         return False
-    gd = m.groupdict()
 
-    if gd.get("odelim") is not None:
-        style = {
-            "--": EdgeStyle.SOLID,
-            "-.": EdgeStyle.DOTTED,
-            "==": EdgeStyle.THICK,
-        }[gd["odelim"]]
-        dst_arrow = gd["cdelim"].endswith(">")
-        src_arrow = gd.get("lhead1") is not None
-        label = _norm_label(gd.get("label"))
-    else:
-        conn = gd["conn"] or ""
-        if "." in conn:
-            style = EdgeStyle.DOTTED
-        elif conn.startswith("="):
-            style = EdgeStyle.THICK
+    groups: list[str] = []
+    prev_end = 0
+    for m in connectors:
+        groups.append(stmt[prev_end : m.start()])
+        prev_end = m.end()
+    groups.append(stmt[prev_end:])
+
+    resolved = [_resolve_nodes(group, nodes, stack) for group in groups]
+
+    for i, m in enumerate(connectors):
+        gd = m.groupdict()
+        if gd.get("odelim") is not None:
+            style = {
+                "--": EdgeStyle.SOLID,
+                "-.": EdgeStyle.DOTTED,
+                "==": EdgeStyle.THICK,
+            }[gd["odelim"]]
+            dst_arrow = gd["cdelim"].endswith(">")
+            src_arrow = gd.get("lhead1") is not None
+            label = _norm_label(gd.get("label"))
         else:
-            style = EdgeStyle.SOLID
-        dst_arrow = conn.endswith(">")
-        src_arrow = gd.get("lhead2") is not None
-        label = _norm_label(gd.get("plabel"))
+            conn = gd["conn"] or ""
+            if "." in conn:
+                style = EdgeStyle.DOTTED
+            elif conn.startswith("="):
+                style = EdgeStyle.THICK
+            else:
+                style = EdgeStyle.SOLID
+            dst_arrow = conn.endswith(">")
+            src_arrow = gd.get("lhead2") is not None
+            label = _norm_label(gd.get("plabel"))
 
-    left_ids = _resolve_nodes(gd["left"], nodes, stack)
-    right_ids = _resolve_nodes(gd["right"], nodes, stack)
-    for src in left_ids:
-        for dst in right_ids:
-            edges.append(
-                FlowEdge(
-                    src=src,
-                    dst=dst,
-                    style=style,
-                    label=label,
-                    dst_arrow=dst_arrow,
-                    src_arrow=src_arrow,
+        for src in resolved[i]:
+            for dst in resolved[i + 1]:
+                edges.append(
+                    FlowEdge(
+                        src=src,
+                        dst=dst,
+                        style=style,
+                        label=label,
+                        dst_arrow=dst_arrow,
+                        src_arrow=src_arrow,
+                    )
                 )
-            )
     return True
 
 
