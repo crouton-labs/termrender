@@ -1,6 +1,46 @@
 # CHANGELOG
 
 
+## v4.7.0 (2026-07-07)
+
+### Features
+
+- **mermaid-class**: Native classDiagram renderer
+  ([`32d6c8c`](https://github.com/crouton-labs/termrender/commit/32d6c8cda0e654120ac2647fe2613f2b06fbb07d))
+
+render_class(source, width) -> list[str] in mermaid_class.py, unwired (not imported by mermaid.py's
+  dispatcher). Standalone module matching mermaid_sequence.py/mermaid_flow.py's shape: own parser,
+  own tests, no Block/pipeline dependency.
+
+Parses classDiagram source (class blocks with member lines, member-association form, bare
+  declarations, <<stereotype>> annotations, ~T~ generics, direction) into the shared
+  FlowGraph/FlowNode/FlowEdge model and hands it to the flowchart engine's layout_flowgraph, using
+  the new compartments and arrow-kind extensions. Covers all six UML relationship kinds
+  (inheritance, composition, aggregation, association, dependency, realization) plus the two
+  headless link forms, both marker-writing directions (<|-- / --|>), quoted cardinalities combined
+  with edge labels, and never-crash raw-echo degradation (missing header, empty body, malformed
+  input, literal box-glyph sanitization).
+
+24 new golden/topology tests in tests/test_mermaid_class.py; full suite (503 tests) green.
+
+- **mermaid-flow**: Support compartmented nodes and UML arrow-kind glyphs
+  ([`2b1441c`](https://github.com/crouton-labs/termrender/commit/2b1441cd707621870651c0c391f603c60f8d3529))
+
+Extend the flowchart engine with two opt-in, backward-compatible hooks so UML-flavored renderers
+  (mermaid classDiagram) can reuse grandalf layout + rasterization + orthogonal routing without
+  duplicating it:
+
+- FlowNode.compartments: list[list[str]] | None draws a multi-line box with a horizontal separator
+  row between compartments (UML name/ fields/methods bands) instead of the single wrapped label.
+  None (the default) is byte-for-byte the original single-label path. -
+  FlowEdge.dst_arrow_kind/src_arrow_kind (default "default") select an arrowhead glyph family
+  independent of style/line weight: triangle_hollow (inheritance/realization), diamond_filled
+  (composition), diamond_hollow (aggregation) — layered on top of the existing direction-computed
+  \u25bc\u25b2\u25b6\u25c0 selection.
+
+All 479 pre-existing tests pass unmodified; every new field defaults to the prior behavior.
+
+
 ## v4.6.3 (2026-07-07)
 
 ### Bug Fixes
