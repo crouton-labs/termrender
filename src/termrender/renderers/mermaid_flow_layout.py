@@ -721,6 +721,38 @@ def _box_dims(label: str, shape: NodeShape = NodeShape.RECT) -> tuple[int, int]:
 _GAP_X = 3          # minimum border-to-border gap between boxes in one rank/band
 _ROW_GAP = 2         # minimum gap between rank bands
 _COMPONENT_GUTTER = 4  # gap between independently-laid-out components
+_LABEL_GAP_PAD = 1   # cells of breathing room either side of a label's own text
+                     # when it forces a rank-band gap wider than _ROW_GAP.
+
+
+def _rank_gap_overrides(
+    edges: list[FlowEdge], rank_of: dict[str, int]
+) -> dict[int, int]:
+    """Minimum inter-rank-band gap keyed by the *lower* rank of each
+    adjacent-rank transition, widened past ``_ROW_GAP`` wherever a labeled
+    edge directly connects that transition's two ranks. A forward edge
+    between adjacent ranks routes as a single straight run (or a Z path
+    that still crosses the same inter-rank band) whose only clear space is
+    this gap — at the base ``_ROW_GAP`` a label wider than a couple of
+    cells has nowhere to go but onto the boxes it connects, which is
+    exactly the short LR/adjacent-rank clipped-label bug this closes.
+    Non-adjacent-rank edges (back-edges, multi-rank spans) don't constrain
+    the gap here — they route through their own side lane, not this band.
+    """
+    overrides: dict[int, int] = {}
+    for e in edges:
+        if e.src == e.dst or not e.label:
+            continue
+        r_src = rank_of.get(e.src)
+        r_dst = rank_of.get(e.dst)
+        if r_src is None or r_dst is None:
+            continue
+        lo_r, hi_r = (r_src, r_dst) if r_src <= r_dst else (r_dst, r_src)
+        if hi_r - lo_r != 1:
+            continue
+        needed = visual_len(e.label) + 2 * _LABEL_GAP_PAD
+        overrides[lo_r] = max(overrides.get(lo_r, _ROW_GAP), needed)
+    return overrides
 
 
 def _native_extents(
@@ -780,12 +812,15 @@ def _place_nodes(
         for v in comp_vertices:
             ranks[sug.grx[v].rank].append(v)
 
+        rank_of = {v.data: sug.grx[v].rank for v in comp_vertices}
+        gap_overrides = _rank_gap_overrides(edges, rank_of)
+
         band_top_for_rank: dict[int, int] = {}
         cursor = 0
         for r in sorted(ranks):
             band_top_for_rank[r] = cursor
             max_h = max(native[v.data][1] for v in ranks[r])
-            cursor += max_h + _ROW_GAP
+            cursor += max_h + gap_overrides.get(r, _ROW_GAP)
 
         min_x = min(v.view.xy[0] for v in comp_vertices)
         provisional = {v: round(v.view.xy[0] - min_x) for v in comp_vertices}
@@ -1214,6 +1249,17 @@ def _label_positions(length: int, center: int, lo: int, hi: int) -> list[int]:
     return order
 
 
+def _reserve_label_margin(canvas: Canvas, x: int, y: int) -> None:
+    """Mark one cell just past a label's edge as reserved, without
+    altering whatever character (if any) already occupies it — a one-cell
+    buffer so a second label placed on an adjacent/overlapping segment
+    (e.g. two back-edge labels sharing a row) lands with visible separation
+    instead of butting directly up against the first label's text."""
+    if x < 0 or y < 0:
+        return
+    canvas.set_char(x, y, canvas.get_char(x, y), reserve=True)
+
+
 def _draw_label_on_segment(
     canvas: Canvas, a: tuple[int, int], b: tuple[int, int], label: str
 ) -> None:
@@ -1226,7 +1272,12 @@ def _draw_label_on_segment(
     self-loop label placement. Shifts along the search axis to the nearest
     span/row fully clear of a reserved (box) cell; if none exists, writes
     at the ideal placement anyway (overflow tolerated) but skips individual
-    reserved cells — a label never corrupts a box.
+    reserved cells — a label never corrupts a box. Every written label cell
+    is itself marked reserved (see :func:`layout_flowgraph`'s two-pass draw
+    order): labels draw only after every edge's line+arrowheads are already
+    on the canvas, so nothing draws over a label afterwards, and a *later*
+    label's own clear-run search treats an earlier label's cells the same
+    as a box's — skip, don't overwrite.
     """
     length = visual_len(label)
     if length <= 0:
@@ -1246,12 +1297,14 @@ def _draw_label_on_segment(
             run = cells(start)
             if not any(canvas.is_reserved(x, y) for x, y in run):
                 for (px, py), ch in zip(run, label):
-                    canvas.draw_glyph(px, py, ch)
+                    canvas.set_char(px, py, ch, reserve=True)
+                _reserve_label_margin(canvas, start - 1, row)
+                _reserve_label_margin(canvas, start + length, row)
                 return
         start = max(lo, min(center - length // 2, hi - length + 1))
         for (px, py), ch in zip(cells(start), label):
             if not canvas.is_reserved(px, py):
-                canvas.draw_glyph(px, py, ch)
+                canvas.set_char(px, py, ch, reserve=True)
         return
 
     # Vertical segment: the label still reads horizontally, centered on
@@ -1272,11 +1325,13 @@ def _draw_label_on_segment(
         run = row_cells(row)
         if not any(canvas.is_reserved(x, y) for x, y in run):
             for (px, py), ch in zip(run, label):
-                canvas.draw_glyph(px, py, ch)
+                canvas.set_char(px, py, ch, reserve=True)
+            _reserve_label_margin(canvas, start_x - 1, row)
+            _reserve_label_margin(canvas, start_x + length, row)
             return
     for (px, py), ch in zip(row_cells(center_row), label):
         if not canvas.is_reserved(px, py):
-            canvas.draw_glyph(px, py, ch)
+            canvas.set_char(px, py, ch, reserve=True)
 
 
 def _draw_polyline(canvas: Canvas, points: list[tuple[int, int]], style: EdgeStyle) -> None:
@@ -1322,67 +1377,61 @@ def _self_loop_points(
     return [(ax, lo), (far, lo), (far, hi), (ax, hi)]
 
 
-def _route_edge(
-    canvas: Canvas,
+def _route_edge_path(
     rects: dict[str, BoxRect],
     direction: Direction,
     edge: FlowEdge,
     lane_counter: list[int],
     self_loop_counter: dict[str, int],
-) -> None:
-    """Draw one edge's full orthogonal path: anchors chosen by relative
-    rank position, an L/Z/C path shape, arrowheads, and an edge label.
-    Dangling node-id references are a defensive no-op (the parser
-    guarantees valid endpoints; this module never crashes on one).
+) -> list[tuple[int, int]] | None:
+    """Compute one edge's polyline points: anchors chosen by relative rank
+    position, an L/Z/C path shape. Pure path computation only — drawing is
+    the caller's job, split into two passes across *all* edges (see
+    :func:`layout_flowgraph`) so that no edge's line ever overwrites
+    another edge's already-placed label. Dangling node-id references
+    return ``None`` (defensive no-op — the parser guarantees valid
+    endpoints; this module never crashes on one).
     """
     src_rect = rects.get(edge.src)
     dst_rect = rects.get(edge.dst)
     if src_rect is None or dst_rect is None:
-        return
+        return None
 
     if edge.src == edge.dst:
         lane = self_loop_counter.get(edge.src, 0)
         self_loop_counter[edge.src] = lane + 1
-        points = _self_loop_points(direction, src_rect, lane)
-    else:
-        src_extent = _rank_extent(direction, src_rect)
-        dst_extent = _rank_extent(direction, dst_rect)
-        same_rank = not (dst_extent[1] < src_extent[0] or src_extent[1] < dst_extent[0])
+        return _self_loop_points(direction, src_rect, lane)
 
-        if same_rank:
-            points = [_facing_anchor(src_rect, dst_rect), _facing_anchor(dst_rect, src_rect)]
-        else:
-            src_center = (src_extent[0] + src_extent[1]) / 2
-            dst_center = (dst_extent[0] + dst_extent[1]) / 2
-            forward = (dst_center > src_center) == _forward_increasing(direction)
-            if forward:
-                points = _z_path(
-                    direction,
-                    _forward_exit(direction, src_rect),
-                    _forward_entry(direction, dst_rect),
-                )
-            else:
-                lane = lane_counter[0]
-                lane_counter[0] += 1
-                lane_secondary = (
-                    _lane_secondary_base(direction, src_rect, dst_rect)
-                    + _LANE_MARGIN
-                    + lane * _LANE_GAP
-                )
-                points = _lane_path(
-                    direction,
-                    _lane_anchor(direction, src_rect),
-                    _lane_anchor(direction, dst_rect),
-                    lane_secondary,
-                )
+    src_extent = _rank_extent(direction, src_rect)
+    dst_extent = _rank_extent(direction, dst_rect)
+    same_rank = not (dst_extent[1] < src_extent[0] or src_extent[1] < dst_extent[0])
 
-    _draw_polyline(canvas, points, edge.style)
-    _draw_arrowheads(canvas, points, edge)
+    if same_rank:
+        return [_facing_anchor(src_rect, dst_rect), _facing_anchor(dst_rect, src_rect)]
 
-    if edge.label:
-        seg = _longest_segment(points)
-        if seg is not None:
-            _draw_label_on_segment(canvas, *seg, edge.label)
+    src_center = (src_extent[0] + src_extent[1]) / 2
+    dst_center = (dst_extent[0] + dst_extent[1]) / 2
+    forward = (dst_center > src_center) == _forward_increasing(direction)
+    if forward:
+        return _z_path(
+            direction,
+            _forward_exit(direction, src_rect),
+            _forward_entry(direction, dst_rect),
+        )
+
+    lane = lane_counter[0]
+    lane_counter[0] += 1
+    lane_secondary = (
+        _lane_secondary_base(direction, src_rect, dst_rect)
+        + _LANE_MARGIN
+        + lane * _LANE_GAP
+    )
+    return _lane_path(
+        direction,
+        _lane_anchor(direction, src_rect),
+        _lane_anchor(direction, dst_rect),
+        lane_secondary,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -1451,10 +1500,27 @@ def layout_flowgraph(g: FlowGraph, width: int) -> list[str]:
             rect = rects.get(n.id)
             if rect is not None:
                 canvas.draw_box(rect, n.shape, n.label)
+        # Two passes across *all* edges, not one pass per edge: every
+        # edge's line + arrowheads draw first, then every edge's label
+        # draws last (see design doc). Interleaving line-then-label per
+        # edge (the old order) let a later edge's line silently erase an
+        # earlier edge's already-placed label whenever their paths shared
+        # a cell — labels are only ever safe once no more lines are coming.
         lane_counter = [0]
         self_loop_counter: dict[str, int] = {}
+        edge_paths: list[tuple[FlowEdge, list[tuple[int, int]]]] = []
         for e in g.edges:
-            _route_edge(canvas, rects, g.direction, e, lane_counter, self_loop_counter)
+            points = _route_edge_path(rects, g.direction, e, lane_counter, self_loop_counter)
+            if points is not None:
+                edge_paths.append((e, points))
+        for e, points in edge_paths:
+            _draw_polyline(canvas, points, e.style)
+            _draw_arrowheads(canvas, points, e)
+        for e, points in edge_paths:
+            if e.label:
+                seg = _longest_segment(points)
+                if seg is not None:
+                    _draw_label_on_segment(canvas, *seg, e.label)
         return canvas.to_lines()
     except Exception:
         return []

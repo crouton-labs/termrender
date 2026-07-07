@@ -67,6 +67,33 @@ def test_inline_label_edge_shows_label_text():
     assert "go now" in text
 
 
+def test_multiple_labeled_back_edges_do_not_erase_each_other():
+    # Regression: the router used to draw each edge's line+label inline in
+    # declaration order, so a later edge's line could silently overwrite an
+    # earlier edge's already-placed label. Both r1 and r2 must survive, and
+    # with real separation — not just "r1" as a bare substring of a
+    # concatenated "r2r1" run.
+    source = "graph TD\nA-->B\nB-->C\nC-->|r1|A\nC-->|r2|B\n"
+    lines = render_flowchart(source, width=80)
+    assert lines
+    text = "\n".join(lines)
+    assert "r1" in text
+    assert "r2" in text
+    assert "r1r2" not in text and "r2r1" not in text
+
+
+def test_lr_short_edge_label_renders_in_full():
+    # Regression: the horizontal label placer used to constrain a label to
+    # the clear run between two adjacent reserved box borders, clipping
+    # "hello" down to just "el". The rank-band gap now widens to fit the
+    # label (see mermaid_flow_layout._rank_gap_overrides).
+    source = "graph LR\nA -->|hello| B\n"
+    lines = render_flowchart(source, width=80)
+    assert lines
+    text = "\n".join(lines)
+    assert "hello" in text
+
+
 # --------------------------------------------------------------------------
 # Labeled back-edge cycle — the exact shape that panics the Go binary
 # --------------------------------------------------------------------------
@@ -88,6 +115,40 @@ def test_labeled_back_edge_cycle_renders_all_boxes_label_and_arrow():
     # top-to-bottom despite the labeled back-edge C -> A.
     row_a, row_b, row_c = _row_of(lines, "A"), _row_of(lines, "B"), _row_of(lines, "C")
     assert row_a < row_b < row_c
+
+
+# --------------------------------------------------------------------------
+# Self-loop — a node edge back to itself
+# --------------------------------------------------------------------------
+
+
+def test_self_loop_renders_visible_loop_and_arrowhead():
+    # A renderer that silently dropped self-loops would still pass a bare
+    # "non-empty, contains A and B" smoke check — assert the loop's real
+    # geometry: an arrowhead, and glyphs extending past the node's own box
+    # border (a dropped loop renders only the bare box).
+    source = "graph TD\nA-->B\nA-->A\n"
+    lines = render_flowchart(source, width=80)
+    assert lines
+    text = "\n".join(lines)
+    assert "A" in text and "B" in text
+    assert _ARROW_RE.search(text)
+    box_right_col = max(line.index("\u2510") for line in lines if "\u2510" in line)
+    assert any(len(line.rstrip()) > box_right_col + 1 for line in lines), (
+        "expected loop glyphs extending past a node box's right border"
+    )
+
+
+def test_labeled_self_loop_renders_loop_arrowhead_and_label():
+    source = "graph TD\nA-->|again|A\n"
+    lines = render_flowchart(source, width=80)
+    assert lines
+    text = "\n".join(lines)
+    assert "A" in text
+    assert "again" in text
+    assert _ARROW_RE.search(text)
+    box_right_col = max(line.index("\u2510") for line in lines if "\u2510" in line)
+    assert any(len(line.rstrip()) > box_right_col + 1 for line in lines)
 
 
 # --------------------------------------------------------------------------
@@ -161,8 +222,32 @@ def test_empty_body_headed_diagram_raw_echoes():
     assert not _BOX_GLYPH_RE.search(text)
 
 
-def test_render_flowchart_never_raises_on_garbage_input():
-    # Defensive: assorted odd inputs must never raise, always return a list.
+def test_degraded_echo_sanitizes_box_glyphs_present_in_raw_source():
+    # Regression: the raw-echo path used to be a plain rstrip of the
+    # source, so a literal box-drawing/geometric glyph typed into
+    # otherwise-malformed source (e.g. a stray "\u250c") survived into the
+    # echo, which the downstream attach viewer could misdetect as a
+    # successful render. The echo must now contain NONE of those glyphs.
+    source = "not a diagram\n\u250c\n"
+    lines = render_flowchart(source, width=80)
+    text = "\n".join(lines)
+    assert not _BOX_GLYPH_RE.search(text)
+    assert lines[0] == "not a diagram"
+    assert "\u250c" not in lines[1]
+
+
+def test_render_flowchart_never_raises_and_degrades_cleanly_on_garbage_input():
+    # Defensive: assorted odd inputs must never raise. A bare
+    # "isinstance(lines, list)" would also accept a renderer that returned
+    # `[]`, a raw echo, or a bogus boxed diagram for every case — assert
+    # the actual degradation semantics instead: whichever inputs don't
+    # render real box glyphs must be an *exact* rstripped echo of the
+    # source (the load-bearing contract), not merely "some list".
     for source in ("", "\n\n\n", "graph", "flowchart LR\n", "graph TD\nA-->\n"):
         lines = render_flowchart(source, width=80)
         assert isinstance(lines, list)
+        text = "\n".join(lines)
+        if not _BOX_GLYPH_RE.search(text):
+            assert lines == [line.rstrip() for line in source.splitlines()], (
+                f"degraded output for {source!r} must be an exact raw echo, got {lines!r}"
+            )

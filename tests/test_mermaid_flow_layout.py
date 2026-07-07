@@ -27,6 +27,14 @@ from termrender.renderers.mermaid_flow_model import (
 )
 
 _BOX_GLYPH_RE = re.compile(r"[\u2500-\u259F\u25A0-\u25FF]")
+_ARROW_RE = re.compile(r"[\u25b2\u25bc\u25b6\u25c0]")  # ▲▼▶◀
+
+
+def _row_of(lines: list[str], label: str) -> int:
+    for i, line in enumerate(lines):
+        if label in line:
+            return i
+    raise AssertionError(f"label {label!r} not found in rendered output: {lines!r}")
 
 
 def _node(id_: str, label: str | None = None, shape: NodeShape = NodeShape.RECT) -> FlowNode:
@@ -167,6 +175,10 @@ def test_wide_fanout_siblings_do_not_overlap():
 
 
 def test_cycle_lays_out_without_hanging():
+    # Real topology, not just "didn't hang": the forward chain A -> B -> C
+    # still orders top-to-bottom despite the C -> A back-edge, and a
+    # back-edge arrowhead actually lands (somewhere) rather than being
+    # silently dropped.
     g = FlowGraph(
         direction=Direction.TB,
         nodes=[_node("A"), _node("B"), _node("C")],
@@ -178,10 +190,17 @@ def test_cycle_lays_out_without_hanging():
     for label in ("A", "B", "C"):
         assert label in text
     assert any(_BOX_GLYPH_RE.search(line) for line in lines)
+    assert _ARROW_RE.search(text)
+    assert _row_of(lines, "A") < _row_of(lines, "B") < _row_of(lines, "C")
 
 
 def test_labeled_back_edge_cycle_does_not_crash():
-    # The exact shape that panics the Go binary: a labeled back-edge.
+    # The exact shape that panics the Go binary: a labeled back-edge. Real
+    # assertions: the "retry" label itself survives, an arrowhead lands,
+    # and the forward chain's top-to-bottom order is unaffected by the
+    # back-edge — a renderer that silently dropped the labeled back-edge
+    # (but kept the two forward edges) would otherwise still pass this test
+    # if it only checked "didn't crash".
     g = FlowGraph(
         direction=Direction.TB,
         nodes=[_node("A"), _node("B"), _node("C")],
@@ -193,10 +212,19 @@ def test_labeled_back_edge_cycle_does_not_crash():
     )
     lines = layout_flowgraph(g, width=80)
     assert lines
+    text = "\n".join(lines)
     assert any(_BOX_GLYPH_RE.search(line) for line in lines)
+    assert "retry" in text
+    assert _ARROW_RE.search(text)
+    assert _row_of(lines, "A") < _row_of(lines, "B") < _row_of(lines, "C")
 
 
-def test_self_loop_does_not_crash():
+def test_self_loop_renders_visible_loop_and_arrowhead():
+    # A renderer that silently dropped every self-loop would still pass a
+    # bare "non-empty output containing A and B" check — assert the loop's
+    # actual geometry instead: an arrowhead, and line glyphs extending
+    # visibly past the node box's own border (a dropped self-loop renders
+    # only the bare box, whose lines never exceed its own right border).
     g = FlowGraph(
         direction=Direction.TB,
         nodes=[_node("A"), _node("B")],
@@ -206,6 +234,27 @@ def test_self_loop_does_not_crash():
     assert lines
     text = "\n".join(lines)
     assert "A" in text and "B" in text
+    assert _ARROW_RE.search(text)
+    box_right_col = max(line.index("\u2510") for line in lines if "\u2510" in line)
+    assert any(len(line.rstrip()) > box_right_col + 1 for line in lines), (
+        "expected loop glyphs extending past a node box's right border"
+    )
+
+
+def test_labeled_self_loop_renders_loop_arrowhead_and_label():
+    g = FlowGraph(
+        direction=Direction.TB,
+        nodes=[_node("A")],
+        edges=[_edge("A", "A", label="again")],
+    )
+    lines = layout_flowgraph(g, width=80)
+    assert lines
+    text = "\n".join(lines)
+    assert "A" in text
+    assert "again" in text
+    assert _ARROW_RE.search(text)
+    box_right_col = max(line.index("\u2510") for line in lines if "\u2510" in line)
+    assert any(len(line.rstrip()) > box_right_col + 1 for line in lines)
 
 
 # --------------------------------------------------------------------------
@@ -214,7 +263,11 @@ def test_self_loop_does_not_crash():
 
 
 @pytest.mark.parametrize("direction", [Direction.TB, Direction.LR, Direction.RL, Direction.BT])
-def test_all_directions_render_without_crashing(direction):
+def test_all_directions_place_nodes_along_the_correct_axis(direction):
+    # A direction-blind renderer (e.g. one that ignored LR/RL/BT and always
+    # laid out top-to-bottom) would still pass a bare "doesn't crash, all
+    # labels present" check for every direction — assert each direction's
+    # actual rank-flow axis and sign instead.
     g = FlowGraph(
         direction=direction,
         nodes=[_node("A"), _node("B"), _node("C")],
@@ -222,10 +275,26 @@ def test_all_directions_render_without_crashing(direction):
     )
     lines = layout_flowgraph(g, width=80)
     assert lines
-    text = "\n".join(lines)
-    for label in ("A", "B", "C"):
-        assert label in text
     assert any(_BOX_GLYPH_RE.search(line) for line in lines)
+
+    row: dict[str, int] = {}
+    col: dict[str, int] = {}
+    for label in ("A", "B", "C"):
+        for i, line in enumerate(lines):
+            if label in line:
+                row[label] = i
+                col[label] = line.index(label)
+                break
+        assert label in row, f"label {label!r} not found in rendered output: {lines!r}"
+
+    if direction is Direction.TB:
+        assert row["A"] < row["B"] < row["C"]
+    elif direction is Direction.BT:
+        assert row["A"] > row["B"] > row["C"]
+    elif direction is Direction.LR:
+        assert col["A"] < col["B"] < col["C"]
+    else:  # Direction.RL
+        assert col["A"] > col["B"] > col["C"]
 
 
 def test_lr_direction_no_overlap():
@@ -278,18 +347,32 @@ def test_fully_isolated_nodes_no_edges():
 
 
 def test_edges_draw_visible_line_glyphs_between_boxes():
-    g = FlowGraph(
-        direction=Direction.TB,
-        nodes=[_node("A"), _node("B")],
-        edges=[_edge("A", "B")],
-    )
+    # The old version of this test accepted plain box-border glyphs
+    # (┌┐└┘) in its allowed set, so it passed even for a graph with NO
+    # edge at all (the two node boxes alone contain those glyphs). Tighten
+    # by inspecting the *inter-box gap rows* specifically — guaranteed
+    # clear of any box by construction (the layout enforces a non-zero
+    # rank gap) — and require a routed line/arrow glyph there; a deleted
+    # edge router would leave those rows blank.
+    from termrender.renderers.mermaid_flow_layout import _place_nodes
+
+    nodes = [_node("A"), _node("B")]
+    edges = [_edge("A", "B")]
+    rects = _place_nodes(nodes, edges, Direction.TB)
+    a, b = rects["A"], rects["B"]
+    gap_lo, gap_hi = a.y + a.h, b.y
+    assert gap_hi > gap_lo, "expected a real inter-rank gap between the two boxes"
+
+    g = FlowGraph(direction=Direction.TB, nodes=nodes, edges=edges)
     lines = layout_flowgraph(g, width=80)
-    text = "\n".join(lines)
-    # A vertical or horizontal line-run glyph should appear somewhere
-    # between the two boxes (not just the box borders themselves).
+    gap_rows = lines[gap_lo:gap_hi]
+    assert gap_rows, "expected rendered rows in the inter-box gap"
     line_glyphs = {"\u2502", "\u2500", "\u250c", "\u2510", "\u2514", "\u2518",
-                   "\u251c", "\u2524", "\u252c", "\u2534", "\u253c"}
-    assert any(ch in text for ch in line_glyphs)
+                   "\u251c", "\u2524", "\u252c", "\u2534", "\u253c",
+                   "\u25b2", "\u25bc", "\u25b6", "\u25c0"}
+    assert any(ch in row for row in gap_rows for ch in line_glyphs), (
+        f"expected a routed edge glyph strictly between the two boxes, got {gap_rows!r}"
+    )
 
 
 def test_dangling_edge_reference_is_ignored_not_raised():
@@ -375,8 +458,12 @@ def test_boxrect_anchor_points():
 # --------------------------------------------------------------------------
 
 
-def test_never_raises_on_odd_but_well_typed_input():
-    # Empty label, width-1 canvases, duplicate edges — should degrade, not raise.
+def test_duplicate_edges_and_empty_labels_render_without_raising():
+    # Empty label, width-1 canvases, duplicate edges must never raise —
+    # and, since this is otherwise a perfectly well-typed two-node graph,
+    # it should still render its two real boxes rather than silently
+    # degrading (a bare "isinstance(lines, list)" would also accept an
+    # empty-list degradation or a raised-then-caught garbage result).
     g = FlowGraph(
         direction=Direction.TB,
         nodes=[_node("A", label=""), _node("B", label="")],
@@ -384,3 +471,6 @@ def test_never_raises_on_odd_but_well_typed_input():
     )
     lines = layout_flowgraph(g, width=1)
     assert isinstance(lines, list)
+    assert lines, "a well-typed non-empty graph must still render"
+    text = "\n".join(lines)
+    assert text.count("\u250c") == 2, "expected exactly the two declared node boxes"

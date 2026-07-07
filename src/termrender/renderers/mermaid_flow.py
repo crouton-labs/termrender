@@ -54,10 +54,20 @@ Known degradations (by design, not bugs)
 
 from __future__ import annotations
 
+import re
+
 from termrender.renderers.mermaid_flow_layout import layout_flowgraph
 from termrender.renderers.mermaid_flow_parser import FlowchartError, parse
 
 __all__ = ["render_flowchart"]
+
+# Same ranges the downstream attach viewer uses to detect render *success*
+# (see the module docstring's "Degradation contract"). The raw-echo path
+# must never contain one of these, even when the malformed/degenerate
+# source itself happens to contain a literal box-drawing or geometric
+# glyph (e.g. hand-typed "\u250c" in otherwise-non-flowchart text) — otherwise a
+# failed render could be misdetected as a successful one.
+_GLYPH_RANGE_RE = re.compile("[\u2500-\u259f\u25a0-\u25ff]")
 
 
 def render_flowchart(source: str, width: int) -> list[str]:
@@ -113,4 +123,12 @@ def render_flowchart(source: str, width: int) -> list[str]:
 
 
 def _raw_echo(source: str) -> list[str]:
-    return [line.rstrip() for line in source.splitlines()]
+    """Plain echo of ``source``'s lines, with any box-drawing/geometric
+    glyph (the same ``\\u2500-\\u259f``/``\\u25a0-\\u25ff`` ranges the
+    downstream viewer checks for) replaced by ``?`` — the degradation
+    contract requires NO such glyph survive, even one present verbatim in
+    malformed/degenerate source, not just glyphs this renderer would have
+    drawn itself."""
+    return [
+        _GLYPH_RANGE_RE.sub("?", line.rstrip()) for line in source.splitlines()
+    ]
