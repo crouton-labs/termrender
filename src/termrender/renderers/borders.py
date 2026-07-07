@@ -31,9 +31,10 @@ def render_box(
     corner_v = visual_len("┌")  # same as ┐, └, ┘
 
     # Grow the box if any content line (or the title) won't fit at the
-    # requested width. mermaid-ascii has no width-control flag, so a child
-    # mermaid block can return lines wider than its allocated content area.
-    # Truncating would corrupt the diagram; growing keeps the box's top,
+    # requested width. Several mermaid renderers size to content rather than
+    # to width (flowchart/class/state/ER/sequence/mindmap/journey), so a
+    # child mermaid block can return lines wider than its allocated content
+    # area. Truncating would corrupt the diagram; growing keeps the box's top,
     # bottom, and side borders aligned at the same column even if it
     # overflows the parent's allocation.
     content_max = visual_len("")

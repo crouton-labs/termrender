@@ -15,28 +15,6 @@ wheels = [
 ]
 
 [[package]]
-name = "mermaid-ascii"
-version = "1.2.0"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c5/d4/a778c5bc7342dd112384021155c2911c5771dc2981770fc384eb5ff89b2c/mermaid_ascii-1.2.0-cp310-cp310-macosx_15_0_arm64.whl", hash = "sha256:b5b39f7f11829f8421966901383b27148eca3c32b71d8ad041d696e3cfb79b16", size = 9549329, upload-time = "2026-04-19T01:29:15.922Z" },
-    { url = "https://files.pythonhosted.org/packages/88/36/53c1e830837e1da0ae6977669bc21001643989e69fd5bb022cc145f04c76/mermaid_ascii-1.2.0-cp310-cp310-manylinux_2_39_x86_64.whl", hash = "sha256:fae27d088909e7087fbfdc35031aec9518208e679caa3ce9d18c0235d098b660", size = 9935798, upload-time = "2026-04-19T01:29:18.217Z" },
-    { url = "https://files.pythonhosted.org/packages/c4/db/3464a53d96dd562d044b20093e250a8b07bf2da2978d2e25c335aa3ccfaf/mermaid_ascii-1.2.0-cp310-cp310-win_amd64.whl", hash = "sha256:9910c2126e546e1d284dfbe1e0004898c0b3b8180b05a1ee5bd2b4625e38455a", size = 19266612, upload-time = "2026-04-19T01:29:20.789Z" },
-    { url = "https://files.pythonhosted.org/packages/fd/90/2813cd484bb4685a89c1a785e2e711855eb2e4bbbc8843f32b3938dbf2cc/mermaid_ascii-1.2.0-cp311-cp311-macosx_15_0_arm64.whl", hash = "sha256:95e8636c83468d8ff198f64ffe45c8747390906cac09040c6b88f6d50c8a26bc", size = 9549331, upload-time = "2026-04-19T01:29:23.525Z" },
-    { url = "https://files.pythonhosted.org/packages/78/d8/4c0602e4ace67005afdb1b6e8fb7a31c7ac4f286caebbdc91e499bcc493f/mermaid_ascii-1.2.0-cp311-cp311-manylinux_2_39_x86_64.whl", hash = "sha256:79e137f9c7e1b1df2b3ba90817b8c0db120e6db1bc1f292ae77901f2ec33ee08", size = 9935799, upload-time = "2026-04-19T01:29:25.983Z" },
-    { url = "https://files.pythonhosted.org/packages/dc/d8/70866e13ebad0f5a33bdc5a2d8d18fc45a1deabbb27b1b52fe51ce948977/mermaid_ascii-1.2.0-cp311-cp311-win_amd64.whl", hash = "sha256:9222e93b21bd92c815fb9b272401a302c6f89fd865c437b5dd491482e10b0529", size = 19266611, upload-time = "2026-04-19T01:29:28.303Z" },
-    { url = "https://files.pythonhosted.org/packages/6c/9a/ea2db564f79e173303dc87366415e01af0da82f42f3e7244870e16b04fbc/mermaid_ascii-1.2.0-cp312-cp312-macosx_15_0_arm64.whl", hash = "sha256:f42fba950a84997efd3c9c332ac215f70f4735a76bd86aa96f479c51a06b9f2a", size = 9549331, upload-time = "2026-04-19T01:29:31.296Z" },
-    { url = "https://files.pythonhosted.org/packages/5a/1f/f14c062e9819b5261ee32d39922ccd53a643c638583732a441aea0c2e137/mermaid_ascii-1.2.0-cp312-cp312-manylinux_2_39_x86_64.whl", hash = "sha256:767f1cd2c056d2e8e7b8ec9cc421504623d6230539beb85834a6128ea5461312", size = 9935798, upload-time = "2026-04-19T01:29:33.613Z" },
-    { url = "https://files.pythonhosted.org/packages/5b/a1/89b6a6dc0fdfc2120c5df7a9b45e1289a5da88e6a4b771985969f452c465/mermaid_ascii-1.2.0-cp312-cp312-win_amd64.whl", hash = "sha256:6081cc8d90df717887505c9fb8fa0481c03f2f4ffdd927e20ee278f31e841ca0", size = 19266611, upload-time = "2026-04-19T01:29:36.364Z" },
-    { url = "https://files.pythonhosted.org/packages/73/46/166ad4b3224fae05459ee8043d97bb51d1a1abedac1e50cf68a23e2cdc58/mermaid_ascii-1.2.0-cp313-cp313-macosx_15_0_arm64.whl", hash = "sha256:11bbf8e4f143802bef9e3c251e3eb69c9ac94d4d0d7e10a203475e0498910d69", size = 9549331, upload-time = "2026-04-19T01:29:38.989Z" },
-    { url = "https://files.pythonhosted.org/packages/41/b5/2f75928e47107268f50e29e7a06636f52b74135eaec380a0442d23f38414/mermaid_ascii-1.2.0-cp313-cp313-manylinux_2_39_x86_64.whl", hash = "sha256:9f394a3bf23b01435cd0b1ee18c5ba25bbcf214a5a8c2a988d6eef92e47b1dd1", size = 9935797, upload-time = "2026-04-19T01:29:41.311Z" },
-    { url = "https://files.pythonhosted.org/packages/9a/26/3c42ff3f6369c46909593f2ad84c204d6829347bfeea368b0443a146eb8c/mermaid_ascii-1.2.0-cp313-cp313-win_amd64.whl", hash = "sha256:9e8587e27edac01cad3a766bf47c95573532acbbbf19d680aff685ee97edddb2", size = 19266611, upload-time = "2026-04-19T01:29:43.437Z" },
-    { url = "https://files.pythonhosted.org/packages/71/31/b5245686cc95a384afd85b2a675fb728d127b241ede9f6e7b4acbfc68d0e/mermaid_ascii-1.2.0-cp314-cp314-macosx_15_0_arm64.whl", hash = "sha256:49c72145cb00535d161d11e3d0ca317eadf9a4e751f53bff9ba3bf8d104d0ca3", size = 9549331, upload-time = "2026-04-19T01:29:45.898Z" },
-    { url = "https://files.pythonhosted.org/packages/03/f7/51e9d8552af2991573f34f0e3f125468c5317f96b5f35fc82d17551f3ac1/mermaid_ascii-1.2.0-cp314-cp314-manylinux_2_39_x86_64.whl", hash = "sha256:9b265ebaf40d6c59041d7f1f31dd5486a04c7cdb624c417f5d57ac122d738afd", size = 9935798, upload-time = "2026-04-19T01:29:48.167Z" },
-    { url = "https://files.pythonhosted.org/packages/af/b6/5e815ac9fbd5d743695b2db70e0986835534e4739b14444355478e1cf850/mermaid_ascii-1.2.0-cp314-cp314-win_amd64.whl", hash = "sha256:af1f836754b1375ab7c109924dd520b6a9926602eb4e39c4b772eefe6f78aa0d", size = 19493778, upload-time = "2026-04-19T01:29:51.301Z" },
-]
-
-[[package]]
 name = "mistune"
 version = "3.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -71,7 +49,6 @@ name = "termrender"
 source = { editable = "." }
 dependencies = [
     { name = "grandalf" },
-    { name = "mermaid-ascii" },
     { name = "mistune" },
     { name = "pygments" },
 ]
@@ -79,7 +56,6 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "grandalf", specifier = ">=0.8" },
-    { name = "mermaid-ascii", specifier = ">=1.2" },
     { name = "mistune", specifier = ">=3.0" },
     { name = "pygments", specifier = ">=2.0" },
 ]

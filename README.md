@@ -134,7 +134,7 @@ That entire output — the nested borders, the tree guide lines, the side-by-sid
 pip install termrender
 ```
 
-Python 3.10+. Three dependencies: [mistune](https://github.com/lepture/mistune) (markdown parsing), [pygments](https://pygments.org/) (syntax highlighting), [mermaid-ascii](https://github.com/mermaid-js/mermaid-ascii) (diagram rendering).
+Python 3.10+. Three dependencies: [mistune](https://github.com/lepture/mistune) (markdown parsing), [pygments](https://pygments.org/) (syntax highlighting), [grandalf](https://github.com/bdcht/grandalf) (mermaid diagram layout).
 
 
 ## Usage
@@ -380,7 +380,7 @@ Horizontal rules with optional centered labels.
 
 ### Mermaid diagrams
 
-Renders mermaid flowcharts as ASCII art via [mermaid-ascii](https://github.com/mermaid-js/mermaid-ascii). Use the `:::mermaid` directive, or a standard GFM ` ```mermaid ` fenced code block — both render the same diagram.
+Renders mermaid diagrams (flowcharts, class/state/ER diagrams, pie/gantt/sequence/mindmap/journey/timeline charts) natively as ASCII/unicode art. Use the `:::mermaid` directive, or a standard GFM ` ```mermaid ` fenced code block — both render the same diagram.
 
 **Input:**
 ```markdown
@@ -392,7 +392,7 @@ graph LR
 :::
 ```
 
-The diagram gets rendered as ASCII art inline in the terminal output. Requires `mermaid-ascii` to be installed (it's a dependency, so it should be).
+The diagram gets rendered as ASCII art inline in the terminal output, no external binary required.
 
 
 ### Nesting

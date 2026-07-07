@@ -28,7 +28,6 @@ classifiers = [
 ]
 dependencies = [
     "mistune>=3.0",
-    "mermaid-ascii>=1.2",
     "pygments>=2.0",
     "grandalf>=0.8",
 ]
@@ -46,11 +45,6 @@ source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/termrender"]
-# Ship the vendored mermaid-ascii binary (built from pinned upstream master;
-# see scripts/build-mermaid-ascii.sh). It lives inside the package dir so the
-# default file selection includes it; artifacts ensures it survives even if
-# VCS-ignored, and hatchling preserves its 0o755 exec bit.
-artifacts = ["src/termrender/_bin/*"]
 
 [tool.semantic_release]
 version_toml = []
