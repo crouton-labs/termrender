@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v4.10.6 (2026-07-10)
+
+### Bug Fixes
+
+- **mermaid-flow**: Honor quotes in pipe edge labels so a literal | renders
+  ([`dbf0e31`](https://github.com/crouton-labs/termrender/commit/dbf0e310b13d502625bf11e15c2bf683ff7242a4))
+
+A quoted edge label (-->|"a | b"|) is valid mermaid.js — the pipe delimiter closes on the quote, not
+  the first inner |. The plabel capture used [^|]*, so a | inside a quoted label ended the capture
+  early, the edge failed to parse, and strict degradation raw-echoed the whole diagram (crtr then
+  shows source instead of the picture). Widen the capture to accept a "..." quoted segment.
+  Regression test added.
+
+### Documentation
+
+- **mermaid-flow**: State lane-routing invariants without old-behavior narration
+  ([`6af57f1`](https://github.com/crouton-labs/termrender/commit/6af57f14d54bfa3d83d756232d8a187bb16a4d9e))
+
+
 ## v4.10.5 (2026-07-07)
 
 ### Bug Fixes
