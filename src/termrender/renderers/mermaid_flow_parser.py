@@ -37,7 +37,10 @@ Grammar covered
   ``{...}`` (part of a node label, e.g. ``A[Go --> Fast]`` or
   ``A[Check; validate]``) is left untouched rather than mistaken for
   statement structure. Empty-string labels (``A -->|| B``) are stored as
-  ``None``.
+  ``None``. Labels are normalized: one pair of wrapping double quotes
+  (mermaid's quoted-label form) is stripped, and ``<br/>`` (any case,
+  optional slash/spaces) becomes a real newline in node labels but flattens
+  to a space in edge labels and subgraph titles, which render single-line.
 - ``subgraph <id>[ title] ... end``: ``id[title]`` splits into graph key and
   display title; a bare ``subgraph Sub1`` (no brackets) uses the token as
   both id and title. Nesting is a stack: a node declared while a subgraph is
@@ -170,17 +173,38 @@ _CONNECTOR_RE = re.compile(
 _OPENERS = set("([{")
 _CLOSERS = {")", "]", "}"}
 
+_BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+
 
 # --------------------------------------------------------------------------
 # Small helpers
 # --------------------------------------------------------------------------
 
 
+def _strip_quotes(text: str) -> str:
+    """Drop one pair of wrapping double quotes (mermaid's quoted-label
+    form, e.g. ``A["text"]`` / ``-->|"text"|``) — the quotes delimit, they
+    are not part of the displayed label."""
+    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+        return text[1:-1].strip()
+    return text
+
+
 def _norm_label(text: str | None) -> str | None:
+    """Normalize an *edge* label: strip wrapping quotes and flatten
+    ``<br/>`` to a space — edge labels render on a single line along the
+    path, so a hard break has nowhere to go."""
     if text is None:
         return None
-    stripped = text.strip()
+    stripped = _BR_RE.sub(" ", _strip_quotes(text.strip())).strip()
     return stripped or None
+
+
+def _norm_node_label(text: str) -> str:
+    """Normalize a *node* label: strip wrapping quotes and turn ``<br/>``
+    into a real newline — node labels are drawn via ``wrap_text``, which
+    honors ``\\n``, for both box sizing and label placement."""
+    return _BR_RE.sub("\n", _strip_quotes(text)).strip()
 
 
 def _bracket_depths(text: str) -> list[int]:
@@ -281,9 +305,11 @@ def _parse_subgraph_header(rest: str) -> tuple[str, str]:
     m = _SUBGRAPH_ID_TITLE_RE.match(rest)
     if m:
         sub_id = m.group(1).strip()
-        title = m.group(2).strip()
+        # Subgraph titles render on a single header line, so <br/> flattens
+        # to a space (same as edge labels).
+        title = _BR_RE.sub(" ", _strip_quotes(m.group(2).strip())).strip()
         return sub_id, (title or sub_id)
-    bare = rest.strip('"')
+    bare = _BR_RE.sub(" ", rest.strip().strip('"')).strip()
     return bare, bare
 
 
@@ -303,7 +329,7 @@ def _parse_node_spec(text: str) -> tuple[str, str, NodeShape, bool] | None:
     for shape, pattern in _SHAPE_PATTERNS:
         sm = pattern.match(rest)
         if sm:
-            label = sm.group(1).strip()
+            label = _norm_node_label(sm.group(1).strip())
             return node_id, (label if label else node_id), shape, False
     return None
 

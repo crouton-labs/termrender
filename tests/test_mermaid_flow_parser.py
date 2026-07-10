@@ -193,7 +193,32 @@ def test_pipe_label_quoted_contains_literal_pipe():
     # first `|`, otherwise the whole diagram raw-echoes.
     g = parse('graph TD\nA-->|"deployed | error"| B\n')
     e = _edges(g, "A", "B")[0]
-    assert e.label == '"deployed | error"'
+    # The quotes delimit the label; mermaid.js does not display them.
+    assert e.label == "deployed | error"
+
+
+def test_node_label_quotes_stripped():
+    g = parse('graph TD\nA["quoted label"]-->B\n')
+    assert _node(g, "A").label == "quoted label"
+
+
+def test_node_label_br_becomes_newline():
+    # <br/> (any case, with or without the slash/spaces) is a hard line
+    # break in a node label — stored as \n so wrap_text honors it.
+    g = parse('graph TD\nA["CP Worker<br/>API_KEY"]-->B[x<BR>y<br />z]\n')
+    assert _node(g, "A").label == "CP Worker\nAPI_KEY"
+    assert _node(g, "B").label == "x\ny\nz"
+
+
+def test_edge_label_br_flattens_to_space():
+    # Edge labels render on a single line, so <br/> flattens to a space.
+    g = parse('graph TD\nA-->|"connect<br/>(OAuth)"| B\n')
+    assert _edges(g, "A", "B")[0].label == "connect (OAuth)"
+
+
+def test_subgraph_title_br_flattens_to_space():
+    g = parse("graph TD\nsubgraph s1[Top<br/>half]\nA\nend\n")
+    assert g.subgraphs[0].title == "Top half"
 
 
 def test_inline_label_form():
