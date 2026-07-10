@@ -202,6 +202,29 @@ def test_node_label_quotes_stripped():
     assert _node(g, "A").label == "quoted label"
 
 
+def test_literal_newlines_inside_quoted_labels_remain_label_content():
+    source = (
+        'flowchart TB\n'
+        'APP["applet server fn<br/>template\n src/server/connectors.ts"]\n'
+        'ROUTES -.->|"execute → 200\n {ok:false,<br/>errorClass:connection-required}"| APP\n'
+    )
+    g = parse(source)
+    assert _node(g, "APP").label == "applet server fn\ntemplate\n src/server/connectors.ts"
+    assert _edges(g, "ROUTES", "APP")[0].label == (
+        "execute → 200 {ok:false, errorClass:connection-required}"
+    )
+
+
+def test_semicolon_inside_quoted_edge_label_does_not_split_statement():
+    g = parse('graph TD\nA-->|"first; second"|B\n')
+    assert _edges(g, "A", "B")[0].label == "first; second"
+
+
+def test_unmatched_quote_in_comment_does_not_join_following_statement():
+    g = parse('graph TD\n%% someone said "hello\nA-->B\n')
+    assert len(_edges(g, "A", "B")) == 1
+
+
 def test_node_label_br_becomes_newline():
     # <br/> (any case, with or without the slash/spaces) is a hard line
     # break in a node label — stored as \n so wrap_text honors it.
@@ -234,6 +257,14 @@ def test_inline_dotted_label_form():
     e = _edges(g, "A", "B")[0]
     assert e.label == "retry"
     assert e.style is EdgeStyle.DOTTED
+
+
+def test_compact_inline_dotted_label_form():
+    g = parse("graph TD\nA -.hosted OAuth page.-> B\n")
+    e = _edges(g, "A", "B")[0]
+    assert e.label == "hosted OAuth page"
+    assert e.style is EdgeStyle.DOTTED
+    assert e.dst_arrow is True
 
 
 def test_inline_thick_label_form():

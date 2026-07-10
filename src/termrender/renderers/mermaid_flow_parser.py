@@ -25,7 +25,7 @@ Grammar covered
 - Edges: ``-->``, ``---``, ``-.->``, ``-.-``, ``==>``, ``===``, and the
   bidirectional ``<-->``/``<-.->``/``<==>`` forms, in both the ``|label|``
   pipe form and the inline ``A -- text --> B`` / ``A -. text .-> B`` /
-  ``A == text ==> B`` form. ``&`` fan-out (``A & B --> C & D``) expands to
+  ``A -.text.-> B`` / ``A == text ==> B`` form. ``&`` fan-out (``A & B --> C & D``) expands to
   the full cartesian product of edges, each carrying the shared style/
   label/arrow flags. A statement may chain any number of connectors
   (``A-->B-->C``) — this is parsed as a sequence of node groups separated
@@ -36,11 +36,13 @@ Grammar covered
   like a connector, ``&``, or ``;`` but sits inside ``[...]``/``(...)``/
   ``{...}`` (part of a node label, e.g. ``A[Go --> Fast]`` or
   ``A[Check; validate]``) is left untouched rather than mistaken for
-  statement structure. Empty-string labels (``A -->|| B``) are stored as
-  ``None``. Labels are normalized: one pair of wrapping double quotes
-  (mermaid's quoted-label form) is stripped, and ``<br/>`` (any case,
-  optional slash/spaces) becomes a real newline in node labels but flattens
-  to a space in edge labels and subgraph titles, which render single-line.
+  statement structure. Newlines and semicolons inside double-quoted labels
+  remain label content instead of splitting statements. Empty-string labels
+  (``A -->|| B``) are stored as ``None``. Labels are normalized: one pair of
+  wrapping double quotes (mermaid's quoted-label form) is stripped, and
+  ``<br/>`` (any case, optional slash/spaces) becomes a real newline in node
+  labels but flattens to a space in edge labels and subgraph titles, which
+  render single-line.
 - ``subgraph <id>[ title] ... end``: ``id[title]`` splits into graph key and
   display title; a bare ``subgraph Sub1`` (no brackets) uses the token as
   both id and title. Nesting is a stack: a node declared while a subgraph is
@@ -108,7 +110,7 @@ _HEADER_RE = re.compile(r"^(graph|flowchart)\b\s*(.*)$", re.IGNORECASE)
 _DIRECTION_RE = re.compile(r"^(TB|TD|LR|RL|BT)\b", re.IGNORECASE)
 
 _SUBGRAPH_RE = re.compile(r"^subgraph\b\s*(.*)$", re.IGNORECASE)
-_SUBGRAPH_ID_TITLE_RE = re.compile(r"^(\S+)\s*\[(.*)\]$")
+_SUBGRAPH_ID_TITLE_RE = re.compile(r"^(\S+)\s*\[(.*)\]$", re.DOTALL)
 _END_RE = re.compile(r"^end$", re.IGNORECASE)
 _CLASSDEF_RE = re.compile(r"^classDef\b\s+\S+\s+\S.*$", re.IGNORECASE)
 _CLASS_RE = re.compile(r"^class\b(?:\s+\S+){2,}", re.IGNORECASE)
@@ -142,17 +144,17 @@ def _is_malformed_presentational_directive(stmt: str) -> bool:
 
 _COMMENT_RE = re.compile(r"^%%")
 
-_NODE_ID_RE = re.compile(r"^([A-Za-z0-9_][A-Za-z0-9_-]*)(.*)$")
+_NODE_ID_RE = re.compile(r"^([A-Za-z0-9_][A-Za-z0-9_-]*)(.*)$", re.DOTALL)
 _SHAPE_PATTERNS: list[tuple[NodeShape, re.Pattern[str]]] = [
-    (NodeShape.STADIUM, re.compile(r"^\(\[(.*)\]\)$")),
-    (NodeShape.CYLINDER, re.compile(r"^\[\((.*)\)\]$")),
-    (NodeShape.CIRCLE, re.compile(r"^\(\((.*)\)\)$")),
-    (NodeShape.HEXAGON, re.compile(r"^\{\{(.*)\}\}$")),
-    (NodeShape.SUBROUTINE, re.compile(r"^\[\[(.*)\]\]$")),
-    (NodeShape.PARALLELOGRAM, re.compile(r"^\[/(.*)/\]$")),
-    (NodeShape.RECT, re.compile(r"^\[(.*)\]$")),
-    (NodeShape.ROUND, re.compile(r"^\((.*)\)$")),
-    (NodeShape.DIAMOND, re.compile(r"^\{(.*)\}$")),
+    (NodeShape.STADIUM, re.compile(r"^\(\[(.*)\]\)$", re.DOTALL)),
+    (NodeShape.CYLINDER, re.compile(r"^\[\((.*)\)\]$", re.DOTALL)),
+    (NodeShape.CIRCLE, re.compile(r"^\(\((.*)\)\)$", re.DOTALL)),
+    (NodeShape.HEXAGON, re.compile(r"^\{\{(.*)\}\}$", re.DOTALL)),
+    (NodeShape.SUBROUTINE, re.compile(r"^\[\[(.*)\]\]$", re.DOTALL)),
+    (NodeShape.PARALLELOGRAM, re.compile(r"^\[/(.*)/\]$", re.DOTALL)),
+    (NodeShape.RECT, re.compile(r"^\[(.*)\]$", re.DOTALL)),
+    (NodeShape.ROUND, re.compile(r"^\((.*)\)$", re.DOTALL)),
+    (NodeShape.DIAMOND, re.compile(r"^\{(.*)\}$", re.DOTALL)),
 ]
 
 # A single connector token: either the inline dash-label form
@@ -163,11 +165,14 @@ _SHAPE_PATTERNS: list[tuple[NodeShape, re.Pattern[str]]] = [
 # and three groups (`A`, `B`, `C`), not one match with a malformed right
 # side.
 _CONNECTOR_RE = re.compile(
+    r"(?P<lhead0><)?(?P<dotodelim>-\.)(?P<dotlabel>.+?)(?P<dotcdelim>\.->|\.-)"
+    r"|"
     r"(?P<lhead1><)?(?P<odelim>--|-\.|==)\s+(?P<label>.+?)\s+"
     r"(?P<cdelim>-->|---|\.->|\.-|==>|===)"
     r"|"
     r"(?P<lhead2><)?(?P<conn>-\.+->|-\.+-|={2,}>|={3,}|-{2,}>|-{2,})"
-    r'(?:\s*\|(?P<plabel>"[^"]*"|[^|]*)\|)?'
+    r'(?:\s*\|(?P<plabel>"[^"]*"|[^|]*)\|)?',
+    re.DOTALL,
 )
 
 _OPENERS = set("([{")
@@ -196,7 +201,8 @@ def _norm_label(text: str | None) -> str | None:
     path, so a hard break has nowhere to go."""
     if text is None:
         return None
-    stripped = _BR_RE.sub(" ", _strip_quotes(text.strip())).strip()
+    stripped = _BR_RE.sub(" ", _strip_quotes(text.strip()))
+    stripped = re.sub(r"\s*\n\s*", " ", stripped).strip()
     return stripped or None
 
 
@@ -228,23 +234,31 @@ def _bracket_depths(text: str) -> list[int]:
 
 def _split_top_level(text: str, sep: str) -> list[str]:
     """Split ``text`` on top-level occurrences of the single-character
-    ``sep`` only — a ``sep`` nested inside ``[...]``/``(...)``/``{...}``
-    (part of a node label) is left untouched."""
+    ``sep`` only — a ``sep`` nested inside a node shape or double-quoted
+    label is left untouched."""
     parts: list[str] = []
     buf: list[str] = []
     depth = 0
+    in_quote = False
+    escaped = False
     for ch in text:
-        if ch in _OPENERS:
+        if ch == '"' and not escaped:
+            in_quote = not in_quote
+            buf.append(ch)
+        elif not in_quote and ch in _OPENERS:
             depth += 1
             buf.append(ch)
-        elif ch in _CLOSERS:
+        elif not in_quote and ch in _CLOSERS:
             depth = max(0, depth - 1)
             buf.append(ch)
-        elif ch == sep and depth == 0:
+        elif ch == sep and depth == 0 and not in_quote:
             parts.append("".join(buf))
             buf = []
         else:
             buf.append(ch)
+        escaped = ch == "\\" and not escaped
+        if ch != "\\":
+            escaped = False
     parts.append("".join(buf))
     return parts
 
@@ -278,14 +292,48 @@ def _scan_connectors(text: str) -> list[re.Match[str]]:
 
 
 def _iter_statements(lines: list[str]) -> Iterator[str]:
-    """Flatten source lines into ``;``-and-newline-separated statements,
-    bracket-depth-aware so a ``;`` inside a node label (``A[Check; x]``)
-    does not split the statement in two."""
+    """Flatten source into Mermaid statements.
+
+    A physical newline ends a statement except while a double-quoted label
+    remains open. Mermaid permits literal newlines in quoted node and edge
+    labels, so those lines are joined with the newline preserved. Top-level
+    semicolons delimit statements; semicolons inside shapes or quotes do not.
+    """
+    logical: list[str] = []
+    in_quote = False
+    escaped = False
+
     for raw in lines:
-        for part in _split_top_level(raw, ";"):
+        # Comments are standalone statements; quote characters in prose do
+        # not participate in Mermaid's quoted-label grammar.
+        if not logical and _COMMENT_RE.match(raw.strip()):
+            yield raw.strip()
+            continue
+
+        logical.append(raw)
+        for ch in raw:
+            if ch == '"' and not escaped:
+                in_quote = not in_quote
+            escaped = ch == "\\" and not escaped
+            if ch != "\\":
+                escaped = False
+
+        if in_quote:
+            continue
+
+        joined = "\n".join(logical)
+        logical = []
+        for part in _split_top_level(joined, ";"):
             part = part.strip()
             if part:
                 yield part
+
+    if logical:
+        # Preserve malformed unterminated input for the normal parser error
+        # path rather than silently dropping its final statement.
+        joined = "\n".join(logical).strip()
+        if joined:
+            yield joined
 
 
 def _extract_direction(rest: str) -> Direction:
@@ -403,7 +451,12 @@ def _try_edge(
 
     for i, m in enumerate(connectors):
         gd = m.groupdict()
-        if gd.get("odelim") is not None:
+        if gd.get("dotodelim") is not None:
+            style = EdgeStyle.DOTTED
+            dst_arrow = gd["dotcdelim"].endswith(">")
+            src_arrow = gd.get("lhead0") is not None
+            label = _norm_label(gd.get("dotlabel"))
+        elif gd.get("odelim") is not None:
             style = {
                 "--": EdgeStyle.SOLID,
                 "-.": EdgeStyle.DOTTED,
