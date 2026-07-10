@@ -1,6 +1,17 @@
 # CHANGELOG
 
 
+## v4.10.7 (2026-07-10)
+
+### Bug Fixes
+
+- Honor <br/> line breaks and strip quoted-label quotes in flowchart labels
+  ([`a05d8d2`](https://github.com/crouton-labs/termrender/commit/a05d8d22344c883d1ee01a0749ee7536e070892d))
+
+- **mermaid-flow**: Parse multiline quoted labels
+  ([`2832f3f`](https://github.com/crouton-labs/termrender/commit/2832f3fbcdaa4b6628588ce2120f932faef90073))
+
+
 ## v4.10.6 (2026-07-10)
 
 ### Bug Fixes
