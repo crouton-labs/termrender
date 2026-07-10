@@ -186,6 +186,16 @@ def test_pipe_label_form():
     assert e.label == "yes"
 
 
+def test_pipe_label_quoted_contains_literal_pipe():
+    # mermaid.js allows a literal `|` inside a quoted edge label; the pipe
+    # delimiter is closed by the quote, not the first inner `|`. Regression:
+    # the plabel capture must honor `"..."` quoting instead of stopping at the
+    # first `|`, otherwise the whole diagram raw-echoes.
+    g = parse('graph TD\nA-->|"deployed | error"| B\n')
+    e = _edges(g, "A", "B")[0]
+    assert e.label == '"deployed | error"'
+
+
 def test_inline_label_form():
     g = parse('graph TD\nA -- some text --> B\n')
     e = _edges(g, "A", "B")[0]
