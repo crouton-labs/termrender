@@ -79,6 +79,7 @@ Document format
   :::code{lang=""}                        syntax-highlighted block (``` fences also work)
   :::quote{author=""}                     attributed block quote
   :::mermaid                             flowchart → ASCII (``` mermaid fences also work)
+  ```text A → B → C                     three-stage Unicode-arrow process → diagram
 """
 
 _DOC_RENDER_HELP = """\

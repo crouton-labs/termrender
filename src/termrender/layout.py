@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from termrender.blocks import Block, BlockType
+from termrender.renderers.arrow_chain import render_arrow_chain
 from termrender.renderers.mermaid import render_mermaid_lines
 from termrender.style import wrap_text, visual_len
 
@@ -143,6 +144,12 @@ def resolve_height(block: Block) -> None:
     elif bt == BlockType.MERMAID:
         source = block.attrs.get("source", "") or _plain_text(block.text)
         lines = render_mermaid_lines(source, width)
+        block.attrs["_rendered"] = "\n".join(lines)
+        block.height = len(lines) if lines else 1
+
+    elif bt == BlockType.ARROW_CHAIN:
+        source = block.attrs.get("source", "") or _plain_text(block.text)
+        lines = render_arrow_chain(source, width)
         block.attrs["_rendered"] = "\n".join(lines)
         block.height = len(lines) if lines else 1
 

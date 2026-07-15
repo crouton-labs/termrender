@@ -361,7 +361,14 @@ def retry(fn, attempts=3):
 └──────────────────────────────────────┘
 ```
 
-Standard fenced code blocks (` ```python `) also work and get the same treatment.
+Standard fenced code blocks (` ```python `) also work and get the same treatment. A one-line untagged or `text`/`plain` fence with three or more stages separated by Unicode arrows (`→`, `⟶`, `⇒`, or `⟹`) renders as a left-to-right process diagram instead, so agents can express a simple flow without Mermaid boilerplate.
+
+**Input:**
+````markdown
+```text
+Core → private preview token at Blaxel edge → TOKEN2 authorization at guest
+```
+````
 
 ### Dividers
 

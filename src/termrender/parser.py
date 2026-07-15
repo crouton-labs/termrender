@@ -15,6 +15,7 @@ from typing import Any
 import mistune
 
 from termrender.blocks import Block, BlockType, InlineSpan
+from termrender.renderers.arrow_chain import parse_arrow_chain
 
 
 class DirectiveError(Exception):
@@ -311,6 +312,14 @@ def _convert_ast(nodes: list[dict], _depth: int = 0) -> list[Block]:
             if lang == "mermaid":
                 blocks.append(Block(
                     type=BlockType.MERMAID,
+                    attrs={"source": raw},
+                ))
+            # A text/plain (or untagged) fence containing one Unicode-arrow
+            # chain is a compact process diagram, not source code. Keep every
+            # other language and multi-line fence on the normal code path.
+            elif lang in {"", "text", "plain", "plaintext"} and parse_arrow_chain(raw) is not None:
+                blocks.append(Block(
+                    type=BlockType.ARROW_CHAIN,
                     attrs={"source": raw},
                 ))
             else:
