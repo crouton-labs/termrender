@@ -387,7 +387,7 @@ Horizontal rules with optional centered labels.
 
 ### Mermaid diagrams
 
-Renders mermaid diagrams (flowcharts, class/state/ER diagrams, pie/gantt/sequence/mindmap/journey/timeline charts) natively as ASCII/unicode art. Use the `:::mermaid` directive, or a standard GFM ` ```mermaid ` fenced code block — both render the same diagram.
+Renders mermaid diagrams (flowcharts, class/state/ER diagrams, Git graphs, pie/gantt/sequence/mindmap/journey/timeline charts) natively as ASCII/unicode art. Use the `:::mermaid` directive, or a standard GFM ` ```mermaid ` fenced code block — both render the same diagram.
 
 **Input:**
 ```markdown

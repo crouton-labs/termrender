@@ -74,6 +74,14 @@ class TestMermaidDispatch(unittest.TestCase):
             self.assertEqual(lines, ["ER"])
             er_mock.assert_called_once()
 
+    def test_gitgraph_routes_to_native_gitgraph_renderer(self):
+        with mock.patch(
+            "termrender.renderers.mermaid.mermaid_gitgraph.render", return_value=["GIT"]
+        ) as gitgraph_mock:
+            lines = mermaid.render_mermaid_lines('gitGraph\n    commit id: "first"', 40)
+            self.assertEqual(lines, ["GIT"])
+            gitgraph_mock.assert_called_once()
+
     def test_sequence_routes_to_native_sequence_renderer(self):
         with mock.patch(
             "termrender.renderers.mermaid.mermaid_sequence.render_sequence",
@@ -120,7 +128,6 @@ class TestMermaidDispatch(unittest.TestCase):
         for src in (
             "sankey-beta\nA,B,10",
             "C4Context\n    Person(a, \"A\")",
-            "gitGraph\n    commit",
             "block-beta\n    columns 1\n    a",
             "packet-beta\n    0-15: \"data\"",
             "kanban\n    Todo\n    Task1",

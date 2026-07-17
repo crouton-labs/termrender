@@ -8,6 +8,7 @@ from termrender.renderers import (
     mermaid_er,
     mermaid_flow,
     mermaid_gantt,
+    mermaid_gitgraph,
     mermaid_journey,
     mermaid_mindmap,
     mermaid_pie,
@@ -46,11 +47,11 @@ def render_mermaid_lines(source: str, width: int) -> list[str]:
     """Dispatch a mermaid source to its type's renderer and return raw lines.
 
     Every diagram type mermaid supports that termrender renders has a
-    dedicated native Python renderer: ``pie``, ``gantt``, ``sequenceDiagram``,
-    ``mindmap``, ``journey``, ``timeline``, ``graph``/``flowchart``,
-    ``classDiagram``, ``stateDiagram``/``stateDiagram-v2``, and ``erDiagram``.
-    Any other type (sankey, C4, gitgraph, block, packet, kanban, …, or
-    anything unrecognized) degrades to a raw echo of the source with no
+    dedicated native Python renderer: ``pie``, ``gantt``, ``gitGraph``,
+    ``sequenceDiagram``, ``mindmap``, ``journey``, ``timeline``,
+    ``graph``/``flowchart``, ``classDiagram``, ``stateDiagram``/``stateDiagram-v2``,
+    and ``erDiagram``. Any other type (sankey, C4, block, packet, kanban, …,
+    or anything unrecognized) degrades to a raw echo of the source with no
     box-drawing glyphs — see :func:`~termrender.renderers.mermaid_degradation.
     raw_echo`. Lines are returned unpadded; callers apply width padding
     uniformly.
@@ -60,6 +61,8 @@ def render_mermaid_lines(source: str, width: int) -> list[str]:
         return mermaid_pie.render(source, width)
     if diagram_type.startswith("gantt"):
         return mermaid_gantt.render(source, width)
+    if diagram_type.startswith("gitgraph"):
+        return mermaid_gitgraph.render(source, width)
     if diagram_type.startswith("sequencediagram"):
         return mermaid_sequence.render_sequence(source, width)
     if diagram_type.startswith("mindmap"):
