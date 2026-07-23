@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v4.11.0 (2026-07-23)
+
+### Features
+
+- Emit row-to-source line map via doc render --line-map
+  ([`bbc30bf`](https://github.com/crouton-labs/termrender/commit/bbc30bfad4cf33657197995e711e787784be09d8))
+
+render_with_map()/--line-map return {lines, rows, blocks}: rendered ANSI rows, a parallel
+  row->top-level-block index map, and per-block 1-indexed inclusive source-line ranges (directives
+  span opener..closer; markdown blocks are mapped by a type-directed scanner over the segment
+  source). Feeds block-level anchor highlighting in humanloop's terminal review surface.
+
+- Render mermaid git graphs
+  ([`8437695`](https://github.com/crouton-labs/termrender/commit/84376953925383dd7d5e3bdb50b41f917fe028f1))
+
+- Render terse Unicode arrow chains
+  ([`26603cd`](https://github.com/crouton-labs/termrender/commit/26603cd0ffaec4e7ec3c00bd8526345b78a5f632))
+
+
 ## v4.10.7 (2026-07-10)
 
 ### Bug Fixes
