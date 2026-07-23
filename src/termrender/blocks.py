@@ -56,3 +56,8 @@ class Block:
     attrs: dict[str, Any] = field(default_factory=dict)
     width: int | None = None
     height: int | None = None
+    # 1-indexed inclusive source-line range this block was parsed from.
+    # Populated for top-level blocks (parser); consumed by the --line-map
+    # output so callers can anchor rendered rows back to source lines.
+    src_start: int | None = None
+    src_end: int | None = None

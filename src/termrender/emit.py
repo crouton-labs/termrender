@@ -89,3 +89,24 @@ def emit(doc: Block, color: bool) -> str:
     """Walk the block tree and return the fully rendered string."""
     lines = emit_block(doc, color)
     return "\n".join(lines)
+
+
+def emit_with_map(doc: Block, color: bool) -> tuple[list[str], list[int | None]]:
+    """Render a DOCUMENT block, also returning a per-row top-level-child map.
+
+    Returns (lines, row_map) where row_map[i] is the index into doc.children
+    of the top-level block that produced lines[i], or None for the separator
+    rows between siblings. Must mirror emit_block's DOCUMENT case exactly so
+    the mapped output is byte-identical to the unmapped render.
+    """
+    lines: list[str] = []
+    row_map: list[int | None] = []
+    sep = visual_ljust("", doc.width or 0)
+    for i, child in enumerate(doc.children):
+        if i > 0:
+            lines.append(sep)
+            row_map.append(None)
+        child_lines = emit_block(child, color)
+        lines.extend(child_lines)
+        row_map.extend([i] * len(child_lines))
+    return lines, row_map

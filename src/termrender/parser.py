@@ -476,6 +476,7 @@ def _split_directives(source: str, _line_offset: int = 0) -> list[dict]:
     lines = source.split("\n")
     segments: list[dict] = []
     current_md_lines: list[str] = []
+    md_start_idx: int | None = None  # 0-based index of the first accumulated md line
     stack: list[dict] = []  # stack of open directives
     trace: list[str] = []   # event log for error diagnostics
     last_closed: dict | None = None  # most recently closed directive entry
@@ -497,8 +498,10 @@ def _split_directives(source: str, _line_offset: int = 0) -> list[dict]:
                     segments.append({
                         "type": "markdown",
                         "content": "\n".join(current_md_lines),
+                        "line_offset": _line_offset + (md_start_idx or 0),
                     })
                     current_md_lines = []
+                    md_start_idx = None
                 entry = {
                     "name": name,
                     "attrs_raw": attrs_raw,
@@ -515,6 +518,8 @@ def _split_directives(source: str, _line_offset: int = 0) -> list[dict]:
                         "attrs": _parse_attrs(entry["attrs_raw"]),
                         "body": "",
                         "body_start_offset": entry["body_start_offset"],
+                        "src_start": abs_line,
+                        "src_end": abs_line,
                     })
                     trace.append(f"    line {abs_line}: {colons}{name}  (self-closing)")
                 else:
@@ -570,6 +575,8 @@ def _split_directives(source: str, _line_offset: int = 0) -> list[dict]:
                     "attrs": _parse_attrs(entry["attrs_raw"]),
                     "body": "\n".join(entry["body_lines"]),
                     "body_start_offset": entry["body_start_offset"],
+                    "src_start": entry["open_line"],
+                    "src_end": abs_line,
                 })
             i += 1
             continue
@@ -578,6 +585,8 @@ def _split_directives(source: str, _line_offset: int = 0) -> list[dict]:
         if stack:
             stack[-1]["body_lines"].append(line)
         else:
+            if md_start_idx is None:
+                md_start_idx = i
             current_md_lines.append(line)
         i += 1
 
@@ -586,6 +595,7 @@ def _split_directives(source: str, _line_offset: int = 0) -> list[dict]:
         segments.append({
             "type": "markdown",
             "content": "\n".join(current_md_lines),
+            "line_offset": _line_offset + (md_start_idx or 0),
         })
 
     # If stack is not empty, the source has unclosed directives
@@ -732,6 +742,138 @@ def _apply_tasklist_markers(block: Block) -> Block:
     return block
 
 
+# ── Source-line assignment for markdown-parsed blocks ───────────────────────
+#
+# mistune's AST carries no source positions, so block→line mapping is
+# reconstructed by a type-directed scan over the segment's lines: for each
+# top-level block mistune produced (in order), consume the lines that belong
+# to a block of that type. Best-effort by design — the map feeds block-level
+# review anchoring, where ±1 line on exotic constructs is acceptable.
+
+_MD_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_MD_ATX_RE = re.compile(r"^ {0,3}#{1,6}(\s|$)")
+_MD_THEMATIC_RE = re.compile(r"^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$")
+_MD_LIST_RE = re.compile(r"^\s*(?:[-*+]|\d{1,9}[.)])(?:\s|$)")
+_MD_QUOTE_RE = re.compile(r"^ {0,3}>")
+_MD_SETEXT_RE = re.compile(r"^ {0,3}(=+|-+)\s*$")
+_MD_INDENT_RE = re.compile(r"^(?: {2,}|\t)")
+
+
+def _starts_new_leaf(line: str) -> bool:
+    """True when a line unambiguously starts a new leaf block (not a paragraph)."""
+    return bool(
+        _MD_ATX_RE.match(line)
+        or _MD_FENCE_RE.match(line)
+        or _MD_THEMATIC_RE.match(line)
+        or _MD_QUOTE_RE.match(line)
+        or _MD_LIST_RE.match(line)
+    )
+
+
+def _consume_md_block(block: Block, lines: list[str], i: int) -> int:
+    """Return the exclusive end index of the block starting at lines[i]."""
+    n = len(lines)
+    t = block.type
+
+    if t == BlockType.HEADING:
+        if _MD_ATX_RE.match(lines[i]):
+            return i + 1
+        # setext heading: text line(s) + ===/--- underline
+        j = i + 1
+        while j < n and not _MD_SETEXT_RE.match(lines[j]):
+            j += 1
+        return min(j + 1, n)
+
+    if t == BlockType.DIVIDER:
+        return i + 1
+
+    if t in (BlockType.CODE, BlockType.MERMAID, BlockType.ARROW_CHAIN):
+        m = _MD_FENCE_RE.match(lines[i])
+        if m:
+            fence = m.group(1)
+            close = re.compile(
+                r"^ {0,3}" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}\s*$"
+            )
+            j = i + 1
+            while j < n and not close.match(lines[j]):
+                j += 1
+            return min(j + 1, n)
+        # indented code block
+        j = i
+        while j < n and (not lines[j].strip() or lines[j].startswith(("    ", "\t"))):
+            j += 1
+        while j > i + 1 and not lines[j - 1].strip():
+            j -= 1
+        return max(j, i + 1)
+
+    if t == BlockType.TABLE:
+        j = i
+        while j < n and lines[j].strip() and "|" in lines[j]:
+            j += 1
+        return max(j, i + 1)
+
+    if t == BlockType.LIST:
+        j = i
+        while j < n:
+            line = lines[j]
+            if not line.strip():
+                # blank inside a list: continues only if the next non-blank
+                # line is another marker or an indented continuation
+                k = j + 1
+                while k < n and not lines[k].strip():
+                    k += 1
+                if k < n and (_MD_LIST_RE.match(lines[k]) or _MD_INDENT_RE.match(lines[k])):
+                    j = k
+                    continue
+                break
+            if _MD_LIST_RE.match(line) or _MD_INDENT_RE.match(line):
+                j += 1
+                continue
+            if _MD_ATX_RE.match(line) or _MD_FENCE_RE.match(line) or _MD_THEMATIC_RE.match(line) or _MD_QUOTE_RE.match(line):
+                break
+            j += 1  # lazy paragraph continuation of an item
+        return max(j, i + 1)
+
+    if t == BlockType.QUOTE:
+        j = i
+        while j < n and lines[j].strip():
+            line = lines[j]
+            if j > i and not _MD_QUOTE_RE.match(line) and _starts_new_leaf(line):
+                break
+            j += 1
+        return max(j, i + 1)
+
+    # PARAGRAPH and anything else: until blank or a new-leaf starter
+    j = i
+    while j < n and lines[j].strip():
+        if j > i and _starts_new_leaf(lines[j]):
+            break
+        j += 1
+    return max(j, i + 1)
+
+
+def _assign_source_lines(blocks: list[Block], lines: list[str], offset: int) -> None:
+    """Assign 1-indexed inclusive src_start/src_end to each block, in order.
+
+    `offset` is the number of source lines preceding `lines` in the file.
+    """
+    i = 0
+    n = len(lines)
+    for block in blocks:
+        while i < n and not lines[i].strip():
+            i += 1
+        if i >= n:
+            # Scanner exhausted (drift on an exotic construct) — pin the
+            # remaining blocks to the last line rather than leaving them unmapped.
+            block.src_start = offset + n
+            block.src_end = offset + n
+            continue
+        start = i
+        i = _consume_md_block(block, lines, start)
+        block.src_start = offset + start + 1
+        block.src_end = offset + i
+
+
 def parse(source: str, _depth: int = 0, _line_offset: int = 0) -> Block:
     """Parse markdown+directive source into a Block tree.
 
@@ -744,12 +886,19 @@ def parse(source: str, _depth: int = 0, _line_offset: int = 0) -> Block:
 
     for seg in segments:
         if seg["type"] == "markdown":
-            children.extend(_parse_markdown(seg["content"], _depth=_depth))
+            md_blocks = _parse_markdown(seg["content"], _depth=_depth)
+            _assign_source_lines(
+                md_blocks, seg["content"].split("\n"), seg.get("line_offset", _line_offset),
+            )
+            children.extend(md_blocks)
         else:
-            children.append(_directive_to_block(
+            block = _directive_to_block(
                 seg["name"], seg["attrs"], seg["body"], _depth=_depth,
                 _line_offset=seg.get("body_start_offset", 0),
-            ))
+            )
+            block.src_start = seg.get("src_start")
+            block.src_end = seg.get("src_end")
+            children.append(block)
 
     # Walk the tree to auto-promote any markdown list with [ ]/[x] markers
     # into a tasklist, regardless of whether it sits inside a directive.

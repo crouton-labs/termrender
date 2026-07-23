@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any, NoReturn
 
-from termrender import render, TerminalError, DirectiveError
+from termrender import render, render_with_map, TerminalError, DirectiveError
 
 _MISSING = object()
 
@@ -90,9 +90,16 @@ Input
   --width N          optional int. Output width in columns. Omit for auto-detect from terminal.
   --color auto|on|off  optional. Force color on/off, or auto-detect (default auto).
   --cjk              optional boolean. When present, treat ambiguous-width Unicode as double-width.
+  --line-map         optional boolean. When present, output JSON instead of raw ANSI:
+                     {lines: string[], rows: (int|null)[], blocks: {type,start,end}[]}
+                     lines are the rendered ANSI rows; rows[i] is the index into blocks
+                     of the top-level source block that produced lines[i] (null for the
+                     separator rows between blocks); blocks carry 1-indexed inclusive
+                     source-line bounds (start/end may be null when unmappable).
 
 Output (stdout, ANSI)
-  The rendered ANSI string. This leaf outputs ANSI, not JSON, on success.
+  The rendered ANSI string. This leaf outputs ANSI, not JSON, on success —
+  unless --line-map is present, in which case it outputs the JSON object above.
 
 Effects
   None. Read-only.
@@ -275,7 +282,10 @@ def _cmd_doc_render(args: argparse.Namespace) -> None:
         os.environ["TERMRENDER_CJK"] = "1"
 
     try:
-        output = render(source, width=width, color=color)
+        if args.line_map:
+            output = json.dumps(render_with_map(source, width=width, color=color)) + "\n"
+        else:
+            output = render(source, width=width, color=color)
     except TerminalError as e:
         _json_error(
             "terminal_error",
@@ -850,6 +860,7 @@ def _parser_doc_render() -> _StrictParser:
     p.add_argument("--width", type=int, default=None, metavar="N")
     p.add_argument("--color", choices=["auto", "on", "off"], default="auto")
     p.add_argument("--cjk", action="store_true", default=False)
+    p.add_argument("--line-map", dest="line_map", action="store_true", default=False)
     return p
 
 
