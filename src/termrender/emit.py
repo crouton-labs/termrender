@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from termrender.blocks import Block, BlockType
+from termrender.blocks import Block, BlockType, Span
 from termrender.renderers import (
     panel, columns, tree, code, text, divider, quote, mermaid, arrow_chain, table,
     diff, charts, stat, timeline,
@@ -91,22 +91,52 @@ def emit(doc: Block, color: bool) -> str:
     return "\n".join(lines)
 
 
-def emit_with_map(doc: Block, color: bool) -> tuple[list[str], list[int | None]]:
-    """Render a DOCUMENT block, also returning a per-row top-level-child map.
+def _emit_block_with_spans(block: Block, color: bool) -> tuple[list[str], list[Span]]:
+    """Render one top-level block, also returning per-row leaf source spans.
 
-    Returns (lines, row_map) where row_map[i] is the index into doc.children
-    of the top-level block that produced lines[i], or None for the separator
-    rows between siblings. Must mirror emit_block's DOCUMENT case exactly so
-    the mapped output is byte-identical to the unmapped render.
+    Lists, tables, and code blocks resolve rows to their finest known source
+    unit (item / table row / content line); every other type resolves to the
+    block's own range. The span-aware renderers share the plain render code
+    path, so lines stay byte-identical to emit_block.
+    """
+    own: Span = (
+        (block.src_start, block.src_end)
+        if block.src_start is not None and block.src_end is not None
+        else None
+    )
+    match block.type:
+        case BlockType.LIST | BlockType.LIST_ITEM:
+            return text.render_with_spans(block, color, own)
+        case BlockType.TABLE:
+            return table.render_with_spans(block, color, own)
+        case BlockType.CODE:
+            return code.render_with_spans(block, color, emit_block, own)
+        case _:
+            lines = emit_block(block, color)
+            return lines, [own] * len(lines)
+
+
+def emit_with_map(doc: Block, color: bool) -> tuple[list[str], list[int | None], list[Span]]:
+    """Render a DOCUMENT block, also returning per-row block and span maps.
+
+    Returns (lines, row_map, spans): row_map[i] is the index into doc.children
+    of the top-level block that produced lines[i] (None for the separator rows
+    between siblings); spans[i] is that row's finest known 1-indexed inclusive
+    source range (None for separators and unmapped blocks). Must mirror
+    emit_block's DOCUMENT case exactly so the mapped output is byte-identical
+    to the unmapped render.
     """
     lines: list[str] = []
     row_map: list[int | None] = []
+    spans: list[Span] = []
     sep = visual_ljust("", doc.width or 0)
     for i, child in enumerate(doc.children):
         if i > 0:
             lines.append(sep)
             row_map.append(None)
-        child_lines = emit_block(child, color)
+            spans.append(None)
+        child_lines, child_spans = _emit_block_with_spans(child, color)
         lines.extend(child_lines)
         row_map.extend([i] * len(child_lines))
-    return lines, row_map
+        spans.extend(child_spans)
+    return lines, row_map, spans

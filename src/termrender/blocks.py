@@ -34,6 +34,11 @@ class BlockType(Enum):
     TIMELINE = "timeline"
 
 
+# A 1-indexed inclusive source-line range attributed to a rendered row,
+# or None when no source info is known (used by the --line-map spans).
+Span = tuple[int, int] | None
+
+
 @dataclass
 class InlineSpan:
     """A span of inline text with optional formatting."""

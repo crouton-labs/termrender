@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from termrender.blocks import Block, InlineSpan
+from termrender.blocks import Block, InlineSpan, Span
 from termrender.style import style, visual_len, visual_ljust, visual_center, render_spans, wrap_text
 
 
@@ -71,6 +71,17 @@ def _wrap_cell_colored(
 
 
 def render(block: Block, color: bool) -> list[str]:
+    return render_with_spans(block, color)[0]
+
+
+def render_with_spans(block: Block, color: bool, inherit: Span = None) -> tuple[list[str], list[Span]]:
+    """Render like `render`, also returning a per-row leaf source span.
+
+    Each source table row (header included) is its own leaf: a row's rendered
+    lines plus the chrome directly above it (top border, header separator,
+    inter-row separator) map to that row's source line; the bottom border maps
+    to the last row. Falls back to the whole-block span when the parser did
+    not record per-row source lines (non-GFM shapes)."""
     headers: list[list] = block.attrs.get("headers", [])
     rows: list[list[list]] = block.attrs.get("rows", [])
     aligns: list[str | None] = block.attrs.get("aligns", [])
@@ -87,7 +98,7 @@ def render(block: Block, color: bool) -> list[str]:
 
     n_cols = max(len(headers), max((len(r) for r in rows), default=0))
     if n_cols == 0:
-        return []
+        return [], []
 
     # Render all cells to plain text for width calculation
     rendered_headers = [render_spans(headers[i], False) if i < len(headers) else "" for i in range(n_cols)]
@@ -154,14 +165,32 @@ def render(block: Block, color: bool) -> list[str]:
         line = style(raw, color=border_color, dim=True, enabled=color)
         return visual_ljust(line, w)
 
+    whole: Span = (
+        (block.src_start, block.src_end)
+        if block.src_start is not None and block.src_end is not None
+        else inherit
+    )
+    header_line: int | None = block.attrs.get("src_header_line")
+    row_lines: list[int] = block.attrs.get("src_row_lines", [])
+    header_span: Span = (header_line, header_line) if header_line is not None else whole
+
+    def row_span(idx: int) -> Span:
+        return (row_lines[idx], row_lines[idx]) if idx < len(row_lines) else whole
+
     lines: list[str] = []
-    lines.append(separator("┌", "┬", "┐"))
-    lines.extend(render_multiline_row(wrapped_headers, is_header=True))
-    lines.append(separator("├", "┼", "┤"))
+    spans: list[Span] = []
+
+    def add(line_batch: list[str], span: Span) -> None:
+        lines.extend(line_batch)
+        spans.extend([span] * len(line_batch))
+
+    add([separator("┌", "┬", "┐")], header_span)
+    add(render_multiline_row(wrapped_headers, is_header=True), header_span)
+    add([separator("├", "┼", "┤")], header_span)
     for idx, wr in enumerate(wrapped_rows):
         if idx > 0:
-            lines.append(separator("├", "┼", "┤"))
-        lines.extend(render_multiline_row(wr, is_header=False))
-    lines.append(separator("└", "┴", "┘"))
+            add([separator("├", "┼", "┤")], row_span(idx))
+        add(render_multiline_row(wr, is_header=False), row_span(idx))
+    add([separator("└", "┴", "┘")], row_span(len(wrapped_rows) - 1) if wrapped_rows else header_span)
 
-    return lines
+    return lines, spans

@@ -42,14 +42,22 @@ def render_with_map(
         rows    list[int|None] — per-row index into `blocks`, None for separator rows
         blocks  list[dict] — per top-level block: {type, start, end} where
                 start/end are 1-indexed inclusive source-line bounds (None when unmapped)
+        spans   list[[start, end]|None] — per-row finest known 1-indexed inclusive
+                source range (list item / table row / code line granularity;
+                None for separator rows and unmapped blocks)
     """
     doc, color = _prepare(source, width, color)
-    lines, rows = emit_with_map(doc, color)
+    lines, rows, spans = emit_with_map(doc, color)
     blocks = [
         {"type": child.type.value, "start": child.src_start, "end": child.src_end}
         for child in doc.children
     ]
-    return {"lines": lines, "rows": rows, "blocks": blocks}
+    return {
+        "lines": lines,
+        "rows": rows,
+        "blocks": blocks,
+        "spans": [list(s) if s is not None else None for s in spans],
+    }
 
 
 def _prepare(source: str, width: int | None, color: bool):

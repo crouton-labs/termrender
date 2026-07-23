@@ -91,11 +91,15 @@ Input
   --color auto|on|off  optional. Force color on/off, or auto-detect (default auto).
   --cjk              optional boolean. When present, treat ambiguous-width Unicode as double-width.
   --line-map         optional boolean. When present, output JSON instead of raw ANSI:
-                     {lines: string[], rows: (int|null)[], blocks: {type,start,end}[]}
+                     {lines: string[], rows: (int|null)[], blocks: {type,start,end}[],
+                      spans: ([start,end]|null)[]}
                      lines are the rendered ANSI rows; rows[i] is the index into blocks
                      of the top-level source block that produced lines[i] (null for the
                      separator rows between blocks); blocks carry 1-indexed inclusive
-                     source-line bounds (start/end may be null when unmappable).
+                     source-line bounds (start/end may be null when unmappable);
+                     spans[i] is the finest known 1-indexed inclusive source range for
+                     lines[i] — list-item, table-row, or code-line granularity where
+                     available, else the whole block (null for separators/unmapped).
 
 Output (stdout, ANSI)
   The rendered ANSI string. This leaf outputs ANSI, not JSON, on success —

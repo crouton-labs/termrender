@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from termrender.blocks import Block, BlockType, InlineSpan
+from termrender.blocks import Block, BlockType, InlineSpan, Span
 from termrender.style import style, visual_len, visual_ljust, wrap_text, render_spans
 
 
@@ -110,13 +110,21 @@ def _task_prefix(item: Block, color: bool) -> str:
     return style("○ ", dim=True, enabled=color)
 
 
-def _render_list(block: Block, color: bool) -> list[str]:
+def _span_of(block: Block, inherit: Span) -> Span:
+    if block.src_start is not None and block.src_end is not None:
+        return (block.src_start, block.src_end)
+    return inherit
+
+
+def _render_list(block: Block, color: bool, inherit: Span = None) -> tuple[list[str], list[Span]]:
+    own = _span_of(block, inherit)
     if not block.children:
-        return [visual_ljust("", block.width)]
+        return [visual_ljust("", block.width)], [own]
 
     ordered = block.attrs.get("ordered", False)
     is_tasklist = block.attrs.get("tasklist", False)
     lines: list[str] = []
+    spans: list[Span] = []
 
     for i, child in enumerate(block.children):
         if child.type == BlockType.LIST_ITEM:
@@ -124,8 +132,9 @@ def _render_list(block: Block, color: bool) -> list[str]:
                 prefix = _task_prefix(child, color)
             else:
                 prefix = f"{i + 1}. " if ordered else "• "
-            item_lines = _render_list_item(child, prefix, color)
+            item_lines, item_spans = _render_list_item(child, prefix, color, own)
             lines.extend(item_lines)
+            spans.extend(item_spans)
         elif child.type == BlockType.LIST:
             # Nested list — indent by 2
             nested = Block(
@@ -135,27 +144,45 @@ def _render_list(block: Block, color: bool) -> list[str]:
                 attrs=child.attrs,
                 width=(child.width or block.width) - 2,
                 height=child.height,
+                src_start=child.src_start,
+                src_end=child.src_end,
             )
-            nested_lines = _render_list(nested, color)
+            nested_lines, nested_spans = _render_list(nested, color, own)
             for nl in nested_lines:
                 lines.append(visual_ljust("  " + nl.rstrip(), block.width))
+            spans.extend(nested_spans)
 
-    return lines if lines else [visual_ljust("", block.width)]
+    if not lines:
+        return [visual_ljust("", block.width)], [own]
+    return lines, spans
 
 
-def _render_list_item(block: Block, prefix: str, color: bool) -> list[str]:
+def _render_list_item(block: Block, prefix: str, color: bool, inherit: Span = None) -> tuple[list[str], list[Span]]:
+    own = _span_of(block, inherit)
+    # The item's own text rows span only its own source lines: when a nested
+    # list (with known source) follows, trim the text span to end just above
+    # it — the nested rows carry their own spans.
+    text_span = own
+    if own is not None:
+        nested_starts = [
+            c.src_start for c in block.children
+            if c.type == BlockType.LIST and c.src_start is not None
+        ]
+        if nested_starts:
+            text_span = (own[0], max(own[0], min(nested_starts) - 1))
     w = block.width
     prefix_w = visual_len(prefix)
     indent = " " * prefix_w
     text_width = w - prefix_w
 
     if not block.text:
-        return [visual_ljust(prefix, w)]
+        return [visual_ljust(prefix, w)], [text_span]
 
     lines = _render_wrapped_spans(
         block.text, text_width, color,
         first_prefix=prefix, cont_prefix=indent, total_width=w,
     )
+    spans: list[Span] = [text_span] * len(lines)
 
     # Render nested children (e.g., nested lists inside list items)
     for child in block.children:
@@ -167,12 +194,15 @@ def _render_list_item(block: Block, prefix: str, color: bool) -> list[str]:
                 attrs=child.attrs,
                 width=w - prefix_w,
                 height=child.height,
+                src_start=child.src_start,
+                src_end=child.src_end,
             )
-            nested_lines = _render_list(nested, color)
+            nested_lines, nested_spans = _render_list(nested, color, own)
             for nl in nested_lines:
                 lines.append(visual_ljust(indent + nl.rstrip(), w))
+            spans.extend(nested_spans)
 
-    return lines
+    return lines, spans
 
 
 def render(block: Block, color: bool) -> list[str]:
@@ -182,8 +212,23 @@ def render(block: Block, color: bool) -> list[str]:
     elif block.type == BlockType.HEADING:
         return _render_heading(block, color)
     elif block.type == BlockType.LIST:
-        return _render_list(block, color)
+        return _render_list(block, color)[0]
     elif block.type == BlockType.LIST_ITEM:
-        return _render_list_item(block, "• ", color)
+        return _render_list_item(block, "• ", color)[0]
     else:
         return [visual_ljust("", block.width or 0)]
+
+
+def render_with_spans(block: Block, color: bool, inherit: Span = None) -> tuple[list[str], list[Span]]:
+    """Render like `render`, also returning a per-row leaf source span.
+
+    List rows resolve to the innermost item that produced them (nested items
+    get their own spans); paragraph and heading rows resolve to the whole
+    block. Rows share the exact render code path, so lines are byte-identical
+    to `render`."""
+    if block.type == BlockType.LIST:
+        return _render_list(block, color, inherit)
+    if block.type == BlockType.LIST_ITEM:
+        return _render_list_item(block, "• ", color, inherit)
+    lines = render(block, color)
+    return lines, [_span_of(block, inherit)] * len(lines)

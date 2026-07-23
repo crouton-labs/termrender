@@ -8,7 +8,7 @@ from pygments import highlight
 from pygments.formatters import TerminalFormatter
 from pygments.lexers import TextLexer, get_lexer_by_name
 
-from termrender.blocks import Block
+from termrender.blocks import Block, Span
 from termrender.renderers.borders import render_box
 from termrender.style import visual_len, wrap_text
 
@@ -17,8 +17,26 @@ def render(
     block: Block, color: bool, render_child: Callable[[Block, bool], list[str]]
 ) -> list[str]:
     """Render a code block with syntax highlighting and box-drawing borders."""
+    return render_with_spans(block, color, render_child)[0]
+
+
+def render_with_spans(
+    block: Block, color: bool, render_child: Callable[[Block, bool], list[str]],
+    inherit: Span = None,
+) -> tuple[list[str], list[Span]]:
+    """Render like `render`, also returning a per-row leaf source span.
+
+    Content rows map 1:1 to their source lines (wrapped continuations share
+    the line); the box chrome maps to the whole block. Falls back to the
+    whole-block span when the parser did not record the first content line."""
     source = block.attrs.get("source", "")
     lang = block.attrs.get("lang")
+    whole: Span = (
+        (block.src_start, block.src_end)
+        if block.src_start is not None and block.src_end is not None
+        else inherit
+    )
+    content_start: int | None = block.attrs.get("src_content_start")
 
     # Wrap raw source lines to fit within the box before highlighting,
     # so render_box doesn't need to grow beyond the layout allocation.
@@ -26,8 +44,17 @@ def render(
     content_w = max((block.width or 1) - 2 * border_v - 2, 1)
     raw_lines = source.split("\n") if source else [""]
     wrapped_lines = []
-    for line in raw_lines:
-        wrapped_lines.extend(wrap_text(line, content_w))
+    line_spans: list[Span] = []
+    for r, line in enumerate(raw_lines):
+        segs = wrap_text(line, content_w)
+        wrapped_lines.extend(segs)
+        if content_start is not None:
+            src_line = content_start + r
+            if block.src_end is not None:
+                src_line = min(src_line, block.src_end)
+            line_spans.extend([(src_line, src_line)] * len(segs))
+        else:
+            line_spans.extend([whole] * len(segs))
 
     wrapped_source = "\n".join(wrapped_lines)
 
@@ -44,10 +71,25 @@ def render(
     else:
         code_lines = wrapped_lines
 
-    return render_box(
+    box_lines = render_box(
         code_lines,
         width=block.width,
         color=color,
         title=lang,
         dim=True,
     )
+    # Box shape: top border + content rows (one empty row when content is
+    # empty) + bottom border. Highlighting preserves line count except that
+    # pygments' trailing-newline rstrip swallows trailing blank lines — drop
+    # their spans to match. Any other disagreement falls back to the
+    # whole-block span rather than misattribute.
+    if len(line_spans) > len(code_lines) and all(
+        not seg for seg in wrapped_lines[len(code_lines):]
+    ):
+        line_spans = line_spans[: len(code_lines)]
+    n_content = len(box_lines) - 2
+    if n_content == len(code_lines) == len(line_spans):
+        content_spans = line_spans
+    else:
+        content_spans = [whole] * n_content
+    return box_lines, [whole] + content_spans + [whole]

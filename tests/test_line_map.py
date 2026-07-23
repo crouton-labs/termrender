@@ -84,3 +84,132 @@ def test_empty_document():
     result = render_with_map("", width=40, color=False)
     assert result["blocks"] == []
     assert result["rows"] == [None] * len(result["rows"])
+
+
+# ── Leaf spans ──────────────────────────────────────────────────────────────
+# spans[] refines rows[]: per rendered row, the finest source range the
+# renderer knows — list items, table rows, and code lines each their own.
+
+import re
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+SPAN_SOURCE = """\
+- item one
+- item two has a fairly long text that wraps at this width
+  - nested a
+  - nested b
+- item three
+
+| a | b |
+|---|---|
+| 1 | 2 |
+| 3 | 4 |
+
+```python
+print("hi")
+x = 1
+```
+"""
+
+
+def _spans_by_text(result):
+    """Map plain rendered text -> span for single rows of interest."""
+    return {
+        _ANSI.sub("", line).strip(): tuple(span) if span else None
+        for line, span in zip(result["lines"], result["spans"])
+    }
+
+
+def test_spans_parallel_and_shape():
+    result = render_with_map(SPAN_SOURCE, width=40, color=True)
+    assert len(result["spans"]) == len(result["lines"])
+    for span, row in zip(result["spans"], result["rows"]):
+        if row is None:
+            assert span is None  # separator rows carry no span
+        else:
+            assert span is not None
+            start, end = span
+            assert isinstance(start, int) and isinstance(end, int)
+            assert 1 <= start <= end
+
+
+def test_list_items_get_own_spans():
+    result = render_with_map(SPAN_SOURCE, width=40, color=True)
+    by_text = _spans_by_text(result)
+    assert by_text["• item one"] == (1, 1)
+    assert by_text["• nested a"] == (3, 3)
+    assert by_text["• nested b"] == (4, 4)
+    assert by_text["• item three"] == (5, 5)
+    # Wrapped continuation rows of item two share its own text line (not the
+    # nested items' lines).
+    item_two_spans = {
+        tuple(span)
+        for line, span in zip(result["lines"], result["spans"])
+        if "item two" in _ANSI.sub("", line) or "wraps" in _ANSI.sub("", line)
+    }
+    assert item_two_spans == {(2, 2)}
+
+
+def test_table_rows_get_own_spans():
+    result = render_with_map(SPAN_SOURCE, width=40, color=True)
+    rows = [
+        (tuple(span), _ANSI.sub("", line).strip())
+        for line, span, row in zip(result["lines"], result["spans"], result["rows"])
+        if span is not None and "│ 1" in _ANSI.sub("", line)
+    ]
+    assert rows and all(s == (9, 9) for s, _ in rows)
+    rows3 = [
+        tuple(span)
+        for line, span in zip(result["lines"], result["spans"])
+        if span is not None and "│ 3" in _ANSI.sub("", line)
+    ]
+    assert rows3 and all(s == (10, 10) for s in rows3)
+    # Header rows map to the header source line.
+    header = [
+        tuple(span)
+        for line, span in zip(result["lines"], result["spans"])
+        if span is not None and re.search(r"│\s*a\s*│", _ANSI.sub("", line))
+    ]
+    assert header and all(s == (7, 7) for s in header)
+
+
+def test_code_lines_map_one_to_one():
+    result = render_with_map(SPAN_SOURCE, width=40, color=True)
+    print_row = next(
+        tuple(span)
+        for line, span in zip(result["lines"], result["spans"])
+        if span is not None and 'print("hi")' in _ANSI.sub("", line)
+    )
+    x_row = next(
+        tuple(span)
+        for line, span in zip(result["lines"], result["spans"])
+        if span is not None and "x = 1" in _ANSI.sub("", line)
+    )
+    assert print_row == (13, 13)
+    assert x_row == (14, 14)
+    # Chrome rows (borders) span the whole block.
+    chrome = [
+        tuple(span)
+        for line, span, row in zip(result["lines"], result["spans"], result["rows"])
+        if span is not None and row == 2 and "┌" in _ANSI.sub("", line)
+    ]
+    assert chrome == [(12, 15)]
+
+
+def test_adjacent_lists_of_different_types_split():
+    src = "1. ordered one\n2. ordered two\n\n- [ ] task open\n- [x] task done\n"
+    result = render_with_map(src, width=40, color=False)
+    assert [b["type"] for b in result["blocks"]] == ["list", "list"]
+    assert (result["blocks"][0]["start"], result["blocks"][0]["end"]) == (1, 2)
+    assert result["blocks"][1]["start"] == 4
+    by_text = _spans_by_text(result)
+    assert by_text["1. ordered one"] == (1, 1)
+    assert by_text["2. ordered two"] == (2, 2)
+    assert by_text["○ task open"] == (4, 4)
+    assert by_text["● task done"] == (5, 5)
+
+
+def test_spans_do_not_change_rendered_lines():
+    result = render_with_map(SPAN_SOURCE, width=40, color=True)
+    assert "\n".join(result["lines"]) == render(SPAN_SOURCE, width=40, color=True)

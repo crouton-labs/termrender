@@ -813,6 +813,18 @@ def _consume_md_block(block: Block, lines: list[str], i: int) -> int:
         return max(j, i + 1)
 
     if t == BlockType.LIST:
+        # A base-indent marker of the other list type (ordered vs bullet)
+        # starts a new list, not a continuation of this one.
+        ordered = bool(block.attrs.get("ordered", False))
+        base_indent = len(lines[i]) - len(lines[i].lstrip())
+
+        def _other_list_type(line: str) -> bool:
+            if not _MD_LIST_RE.match(line):
+                return False
+            stripped = line.lstrip()
+            indent = len(line) - len(stripped)
+            return indent <= base_indent and stripped[0].isdigit() != ordered
+
         j = i
         while j < n:
             line = lines[j]
@@ -822,9 +834,15 @@ def _consume_md_block(block: Block, lines: list[str], i: int) -> int:
                 k = j + 1
                 while k < n and not lines[k].strip():
                     k += 1
-                if k < n and (_MD_LIST_RE.match(lines[k]) or _MD_INDENT_RE.match(lines[k])):
+                if (
+                    k < n
+                    and (_MD_LIST_RE.match(lines[k]) or _MD_INDENT_RE.match(lines[k]))
+                    and not _other_list_type(lines[k])
+                ):
                     j = k
                     continue
+                break
+            if j > i and _other_list_type(line):
                 break
             if _MD_LIST_RE.match(line) or _MD_INDENT_RE.match(line):
                 j += 1
@@ -852,10 +870,60 @@ def _consume_md_block(block: Block, lines: list[str], i: int) -> int:
     return max(j, i + 1)
 
 
+_MD_TABLE_SEP_RE = re.compile(r"^\s*\|?[\s:|-]+\|?\s*$")
+
+
+def _assign_list_item_lines(block: Block, lines: list[str], start: int, end: int, offset: int) -> None:
+    """Best-effort per-item src assignment inside a consumed LIST range.
+
+    Sibling items are the marker lines at the shallowest indent in
+    [start, end); each item spans its marker line up to (not including) the
+    next sibling marker, trimmed of trailing blanks. A nested LIST inside an
+    item gets the item's tail from its first deeper marker and recurses.
+    Extra parsed items beyond the found markers pin to the range end (same
+    convention as the top-level scanner).
+    """
+    positions = [
+        (j, len(lines[j]) - len(lines[j].lstrip()))
+        for j in range(start, end)
+        if _MD_LIST_RE.match(lines[j])
+    ]
+    if not positions:
+        return
+    base = min(indent for _, indent in positions)
+    markers = [j for j, indent in positions if indent == base]
+    items = [c for c in block.children if c.type == BlockType.LIST_ITEM]
+    for k, item in enumerate(items):
+        if k >= len(markers):
+            item.src_start = offset + end
+            item.src_end = offset + end
+            continue
+        item_start = markers[k]
+        item_end = markers[k + 1] if k + 1 < len(markers) else end
+        while item_end > item_start + 1 and not lines[item_end - 1].strip():
+            item_end -= 1
+        item.src_start = offset + item_start + 1
+        item.src_end = offset + item_end
+        nested_lists = [c for c in item.children if c.type == BlockType.LIST]
+        if nested_lists:
+            nested_start = next(
+                (j for j, indent in positions if item_start < j < item_end and indent > base),
+                None,
+            )
+            if nested_start is not None:
+                nested = nested_lists[0]
+                nested.src_start = offset + nested_start + 1
+                nested.src_end = offset + item_end
+                _assign_list_item_lines(nested, lines, nested_start, item_end, offset)
+
+
 def _assign_source_lines(blocks: list[Block], lines: list[str], offset: int) -> None:
     """Assign 1-indexed inclusive src_start/src_end to each block, in order.
 
     `offset` is the number of source lines preceding `lines` in the file.
+    Also records finer-grained source info consumed by the --line-map spans:
+    per-item ranges on LIST children, per-source-row lines on TABLE attrs,
+    and the first content line on CODE attrs.
     """
     i = 0
     n = len(lines)
@@ -872,6 +940,20 @@ def _assign_source_lines(blocks: list[Block], lines: list[str], offset: int) -> 
         i = _consume_md_block(block, lines, start)
         block.src_start = offset + start + 1
         block.src_end = offset + i
+        if block.type == BlockType.LIST:
+            _assign_list_item_lines(block, lines, start, i, offset)
+        elif block.type == BlockType.TABLE:
+            # GFM shape: header line, alignment separator, then body rows 1:1.
+            if i - start >= 2 and _MD_TABLE_SEP_RE.match(lines[start + 1]):
+                block.attrs["src_header_line"] = offset + start + 1
+                block.attrs["src_row_lines"] = [
+                    offset + start + 3 + k for k in range(i - start - 2)
+                ]
+        elif block.type == BlockType.CODE:
+            # First content line: after the opener for fenced blocks, the
+            # first line itself for indented ones.
+            fenced = bool(_MD_FENCE_RE.match(lines[start]))
+            block.attrs["src_content_start"] = offset + start + (2 if fenced else 1)
 
 
 def parse(source: str, _depth: int = 0, _line_offset: int = 0) -> Block:
