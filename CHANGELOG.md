@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v4.12.0 (2026-07-23)
+
+### Features
+
+- Leaf-granularity source spans in the line map
+  ([`a99247c`](https://github.com/crouton-labs/termrender/commit/a99247cf42f7cfc253960d82d506cfa8835085b4))
+
+render_with_map / doc render --line-map gain a spans field: per rendered row, the finest 1-indexed
+  inclusive source range the renderer knows — one span per list item (nested items get their own),
+  per table row (header included, adjacent chrome attached), and per fenced/indented code line;
+  diagrams, paragraphs, and headings span their whole block. Existing lines/rows/blocks fields are
+  unchanged, and the span-aware renderers share the plain render code path so output stays
+  byte-identical.
+
+Also stops the list source scanner at a base-indent marker of the other list type (ordered vs
+  bullet), which previously over-consumed adjacent lists and pinned the second list's map to the
+  range end.
+
+
 ## v4.11.0 (2026-07-23)
 
 ### Features
