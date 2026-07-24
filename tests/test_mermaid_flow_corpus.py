@@ -32,6 +32,7 @@ from __future__ import annotations
 import re
 
 from termrender.renderers.mermaid_flow import render_flowchart
+from termrender.style import visual_len
 
 _BOX_GLYPH_RE = re.compile(r"[\u2500-\u259F\u25A0-\u25FF]")
 
@@ -444,18 +445,67 @@ def test_nested_subgraph_golden():
 
 
 def test_long_label_vs_tight_width_golden():
+    # The label's natural 20-cell wrap budget would render 24 cells wide;
+    # the width-fitting loop narrows the budget until the diagram fits the
+    # 20-cell request, without dropping a character of the label.
     source = "graph TD\nA[This is quite a very long label indeed]-->B[short]\n"
     assert _lines(source, width=20) == [
-        "┌──────────────────────┐",
-        "│ This is quite a very │",
-        "│  long label indeed   │",
-        "└──────────────────────┘",
-        "            │",
-        "            │",
-        "        ┌───▼───┐",
-        "        │ short │",
-        "        └───────┘",
+        "┌─────────────────┐",
+        "│ This is quite a │",
+        "│ very long label │",
+        "│     indeed      │",
+        "└─────────────────┘",
+        "         │",
+        "         │",
+        "     ┌───▼───┐",
+        "     │ short │",
+        "     └───────┘",
     ]
+
+
+def test_wide_lr_chain_fits_width_without_losing_content_or_direction():
+    # A wide LR chain of long-labeled nodes wants 90 cells at its natural
+    # label budget; it must compact into a narrower terminal by wrapping
+    # labels harder, keeping every box, the LR direction, and every word.
+    source = (
+        "flowchart LR\n"
+        "  A[Collect raw telemetry events] --> B[Normalize and enrich records]\n"
+        "  B --> C[Detect anomalous behaviour patterns]\n"
+        "  C --> D[Notify on-call responder team]\n"
+    )
+    labels = [
+        "Collect raw telemetry events",
+        "Normalize and enrich records",
+        "Detect anomalous behaviour patterns",
+        "Notify on-call responder team",
+    ]
+    words = [w for label in labels for w in label.split()]
+    for width in (60, 120):
+        lines = _lines(source, width=width)
+        assert max(visual_len(line) for line in lines) <= width
+        # Topology and content survive the compaction: four boxes, still on
+        # one LR row (each box's top border on the same line as its
+        # neighbours' would be for TB stacking, so count corners per line),
+        # and every label word still present somewhere in the output.
+        text = "".join(lines)
+        assert text.count("┌") == 4
+        assert max(line.count("┌") for line in lines) > 1, "LR row was rotated"
+        squashed = re.sub(r"[^0-9A-Za-z-]+", "", text)
+        for word in words:
+            assert word in squashed
+
+
+def test_wide_glyph_labels_fit_width_and_stay_inside_their_boxes():
+    # Compaction is measured in display columns, not code points: a CJK
+    # label must wrap and draw by the cells it actually occupies, so no
+    # row is ever wider than the box border it sits inside.
+    source = "flowchart LR\n  A[" + "\u754c" * 16 + "] --> B[" + "\u754c" * 16 + "]\n"
+    lines = _lines(source, width=60)
+    assert max(visual_len(line) for line in lines) <= 60
+    border_w = {visual_len(line) for line in lines if "\u250c" in line}
+    assert len(border_w) == 1
+    assert all(visual_len(line) <= max(border_w) for line in lines)
+    assert "".join(lines).count("\u754c") == 32
 
 
 # --------------------------------------------------------------------------

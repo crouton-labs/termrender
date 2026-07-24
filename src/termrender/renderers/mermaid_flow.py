@@ -46,9 +46,13 @@ Known degradations (by design, not bugs)
 - See ``mermaid_flow_layout.py``'s module docstring for the edge-routing
   degradations (dense-graph crossings, label-lane overlap, CJK wrapping,
   minimum-box-size self-loop cosmetics).
-- ``width`` is advisory only: like the other native renderers in this
-  package, this renderer sizes to content and may overflow a narrow
-  terminal rather than truncate the diagram.
+- ``width`` is fitted naturally, not enforced: layout narrows the
+  node-label wrap budget until the diagram fits (see
+  :func:`~termrender.renderers.mermaid_flow_layout.layout_flowgraph`),
+  preserving topology, the authored direction, and every character. A
+  diagram whose narrowest achievable form is still wider than ``width``
+  (long edge labels, or simply many ranks) overflows rather than being
+  truncated or rotated.
 """
 
 from __future__ import annotations
@@ -91,9 +95,10 @@ def render_flowchart(source: str, width: int) -> list[str]:
     Args:
         source: The mermaid fence body (with or without the surrounding
             fence markers — only the text between them).
-        width: Advisory terminal width. See the module docstring's
-            "Known degradations" for why this is advisory rather than a
-            hard wrap.
+        width: Terminal width budget in cells. Layout compacts node
+            labels to fit it where the content allows; see the module
+            docstring's "Known degradations" for when a diagram still
+            overflows.
 
     Returns:
         Rendered lines on success, or a raw-echo of ``source`` on any of

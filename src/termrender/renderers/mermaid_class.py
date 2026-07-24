@@ -415,8 +415,11 @@ def render_class(source: str, width: int) -> list[str]:
     Args:
         source: The mermaid fence body (with or without surrounding fence
             markers — only the text between them).
-        width: Advisory terminal width — unused, like the flowchart and
-            sequence renderers; this function sizes to content.
+        width: Terminal width budget in cells. It reaches the flowchart
+            engine's label-narrowing width fit, which only affects the
+            plain single-label boxes (a class with no members and no
+            annotation); a compartmented class's lines are pre-formatted
+            here and size to content, so a diagram of those may overflow.
 
     Returns:
         Rendered lines on success (guaranteed to contain box-drawing

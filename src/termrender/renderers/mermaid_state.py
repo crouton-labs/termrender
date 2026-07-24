@@ -497,9 +497,10 @@ def render_state(source: str, width: int) -> list[str]:
     Args:
         source: The mermaid fence body (with or without the surrounding
             fence markers — only the text between them).
-        width: Advisory terminal width; sized to content, may overflow
-            (see the module docstring's "Known degradations", inherited
-            from the underlying flowchart engine).
+        width: Terminal width budget in cells. The underlying flowchart
+            engine compacts state labels to fit it where the content
+            allows, and overflows rather than truncating when it can't
+            (see the module docstring's "Known degradations").
 
     Returns:
         Rendered lines on success, or a raw-echo of ``source`` on any of

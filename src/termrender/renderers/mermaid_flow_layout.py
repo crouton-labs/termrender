@@ -26,6 +26,15 @@ within a band sorted by grandalf's provisional column and nudged apart to
 guarantee a minimum gap — this preserves grandalf's crossing-minimized
 *ordering* without trusting its raw floats for exact spacing.
 
+The caller's terminal ``width`` is fitted *naturally*: :func:`layout_flowgraph`
+retries the whole layout with progressively narrower node-label wrap
+budgets (:data:`_LABEL_WIDTH_STEPS`, widest first, threaded through
+:func:`_box_dims`) and returns the first result that fits, so boxes get
+narrower and taller while topology, the authored direction, and every
+character of content stay untouched. A diagram that already fits the
+widest budget therefore lays out exactly once and pays nothing for the
+fit.
+
 Rank-flow direction (``TB``/``BT``/``LR``/``RL``) is never passed to
 grandalf (it has no such parameter) — it is a post-hoc coordinate transform
 applied to the final integer (col, band) placement: identity for TB, a
@@ -99,11 +108,22 @@ for small (≤~20 node) agent-emitted graphs; see the design doc's
 
 Known degradations (by design, not bugs)
 -----------------------------------------
-- Node labels wrap via :func:`termrender.style.wrap_text`, which measures
-  with ``len()`` internally (a pre-existing termrender limitation, see the
-  root ``CLAUDE.md``) — CJK/wide-glyph labels may wrap at the wrong point.
-  Box *dimensions*, however, are always computed from :func:`visual_len` of
-  the wrapped lines, so the box itself is never too narrow for its content.
+- Node labels wrap through this module's own :func:`_wrap_label` (a
+  cell-measured twin of :func:`termrender.style.wrap_text`, which measures
+  with ``len()`` — see the root ``CLAUDE.md``), so CJK/wide-glyph labels
+  wrap and size by the columns they actually occupy. UML compartment
+  lines are the exception: they are pre-formatted by their caller and
+  written one code point per cell (:meth:`Canvas._draw_rect_compartments`),
+  so a wide-glyph class/ER compartment can still run past its border.
+- Width fitting can only narrow *node labels*, so a diagram still
+  overflows when what remains is irreducible: many ranks along the flow
+  axis (each box bottoms out at ``_MIN_LABEL_CONTENT_WIDTH + 4`` cells
+  plus its inter-rank gap), long edge labels (never wrapped — each reads
+  along one straight run of its own path, which for LR/RL sets that
+  rank gap's width outright), or pre-formatted compartments (UML/ER
+  boxes, which ignore the label budget by design). At the narrowest
+  budgets ``wrap_text`` breaks a long word mid-word rather than let the
+  box outgrow the budget — ugly, but nothing is lost.
 - Dense graphs may show edge-line crossings, and two edge labels sharing a
   crowded lane may overlap each other even after the nearest-clear-run
   shift — an accepted limit of the medium, not a routing bug.
@@ -154,9 +174,94 @@ from termrender.renderers.mermaid_flow_model import (
     NodeShape,
     Subgraph,
 )
-from termrender.style import visual_center, visual_len, wrap_text
+from termrender.style import visual_center, visual_len
 
 __all__ = ["layout_flowgraph", "Canvas", "BoxRect"]
+
+
+# --------------------------------------------------------------------------
+# --- label wrapping ---
+# --------------------------------------------------------------------------
+
+
+def _prefix_within_cells(word: str, cells: int) -> str:
+    """Longest prefix of ``word`` whose glyphs fit ``cells`` display
+    columns — the cell-aware substitute for ``word[:n]`` when hard-breaking
+    an over-long word."""
+    out: list[str] = []
+    used = 0
+    for ch in word:
+        w = visual_len(ch)
+        if used + w > cells:
+            break
+        out.append(ch)
+        used += w
+    return "".join(out)
+
+
+def _wrap_label(text: str, cells: int) -> list[str]:
+    """Word-wrap ``text`` to ``cells`` *display columns*.
+
+    Same greedy algorithm as :func:`termrender.style.wrap_text` (and
+    byte-identical to it for text whose every glyph is one cell wide), but
+    measured with :func:`visual_len` throughout, so a CJK/fullwidth label
+    wraps at the column it actually occupies. This engine needs that
+    stronger guarantee than the rest of termrender because it wraps the
+    same label *twice* — once to size the box (:func:`_box_dims`) and again
+    to draw it into the box's interior (:meth:`Canvas._draw_wrapped_label`)
+    — and the two passes must agree exactly or the drawn text runs past
+    the border it was sized to sit inside.
+
+    A word wider than the whole budget is hard-broken across lines (never
+    dropped); a single glyph wider than the budget still gets its own line
+    and simply makes that box a column wider than the budget asked for.
+    """
+    if not text:
+        return [""]
+    if "\n" in text:
+        out: list[str] = []
+        for seg in text.split("\n"):
+            out.extend(_wrap_label(seg, cells))
+        return out
+    if text.isspace():
+        return [""]
+    if cells <= 0:
+        return [text]
+    lines: list[str] = []
+    current = ""
+    for word in text.split(" "):
+        if not word:
+            # Consecutive spaces produce empty tokens; keep the space.
+            if current:
+                current += " "
+            continue
+        while visual_len(word) > cells:
+            budget = cells if not current else cells - visual_len(current) - 1
+            chunk = _prefix_within_cells(word, budget) if budget > 0 else ""
+            if not chunk:
+                if current:
+                    lines.append(current)
+                    current = ""
+                    continue
+                # A single glyph wider than the entire budget: emit it
+                # anyway rather than loop forever — sizing measures the
+                # emitted lines, so the box grows to hold it.
+                chunk = word[0]
+            lines.append(current + " " + chunk if current else chunk)
+            current = ""
+            word = word[len(chunk):]
+        if not word:
+            continue
+        if not current:
+            current = word
+        elif visual_len(current) + 1 + visual_len(word) <= cells:
+            current += " " + word
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines or [""]
 
 
 # --------------------------------------------------------------------------
@@ -363,7 +468,7 @@ class Canvas:
         inner_w = min(right - left + 1 for _, left, right in rows)
         if inner_w <= 0:
             return
-        lines = wrap_text(label, inner_w)
+        lines = _wrap_label(label, inner_w)
         start = max(0, (len(rows) - len(lines)) // 2)
         for i, line in enumerate(lines):
             ridx = start + i
@@ -372,8 +477,11 @@ class Canvas:
             y, left, right = rows[ridx]
             row_w = right - left + 1
             centered = visual_center(line, row_w)
-            for j, ch in enumerate(centered):
-                self.set_char(left + j, y, ch, reserve=True)
+            # Write through the cell-advancing run writer, not one grid
+            # cell per code point: a wide glyph covers two columns, and
+            # only that accounting keeps the drawn row exactly as wide as
+            # the border it sits inside.
+            _write_label_run(self, left, y, centered, check_reserved=False)
 
     def _draw_rect(self, rect: "BoxRect", label: str) -> None:
         """``NodeShape.RECT`` — the plain bordered rectangle every other
@@ -541,7 +649,7 @@ class Canvas:
             self._draw_rect(rect, label)
             return
         max_taper = max(1, (w - 1) // 2)
-        content_lines = wrap_text(label, max(w - 4, 1)) or [""]
+        content_lines = _wrap_label(label, max(w - 4, 1)) or [""]
         taper = max(1, (h - len(content_lines)) // 2)
         taper = min(taper, max_taper, (h - 1) // 2 or 1)
         if h - 2 * taper < 1:
@@ -742,6 +850,15 @@ _MAX_LABEL_CONTENT_WIDTH = 20
 _MIN_BOX_W = 5
 _MIN_BOX_H = 3
 
+# Node-label wrap budgets tried by layout_flowgraph's width-fitting loop,
+# widest first: the natural budget a diagram gets when width is no
+# constraint, then progressively narrower ones down to a floor that still
+# reads as a label rather than a column of syllables. Coarse deliberately
+# — each step is a full layout pass, and a finer ladder buys a couple of
+# columns for several times the work on graphs that are hard to fit anyway.
+_MIN_LABEL_CONTENT_WIDTH = 6
+_LABEL_WIDTH_STEPS = (_MAX_LABEL_CONTENT_WIDTH, 16, 12, 9, 7, _MIN_LABEL_CONTENT_WIDTH)
+
 # Per-shape extra cells added around the base rect sizing, so the interior
 # usable area (where the wrapped label actually lands) is never smaller than
 # a plain rect would give it — shapes whose border eats into the bounding
@@ -782,24 +899,44 @@ def _compartment_box_dims(compartments: list[list[str]]) -> tuple[int, int]:
     return w, h
 
 
-def _box_dims_for_node(n: FlowNode) -> tuple[int, int]:
+def _box_dims_for_node(
+    n: FlowNode, label_width: int = _MAX_LABEL_CONTENT_WIDTH
+) -> tuple[int, int]:
     """Dispatch box sizing on whether ``n`` carries UML-style
     ``compartments`` — the model-level extension point that keeps every
     other node's sizing (and thus every existing golden-output test)
-    byte-for-byte unchanged."""
+    byte-for-byte unchanged. ``label_width`` is the per-node label wrap
+    budget chosen by the width-fitting loop in :func:`layout_flowgraph`;
+    compartmented (UML) nodes ignore it, since their caller pre-formats
+    every compartment line itself."""
     if n.compartments is not None:
         return _compartment_box_dims(n.compartments)
-    return _box_dims(n.label, n.shape)
+    return _box_dims(n.label, n.shape, label_width)
 
 
-def _box_dims(label: str, shape: NodeShape = NodeShape.RECT) -> tuple[int, int]:
+def _box_dims(
+    label: str,
+    shape: NodeShape = NodeShape.RECT,
+    label_width: int = _MAX_LABEL_CONTENT_WIDTH,
+) -> tuple[int, int]:
     """Content-driven box extents (cells), used both to size the grandalf
     ``VertexViewer`` and later to actually draw the box — sizing always goes
     through :func:`visual_len` so wide glyphs are never under-reserved (see
     the design doc's CJK open risk). Shape-aware: several shapes need more
     room than a plain rect to keep the label clear of their slanted/curved
-    border (see the module-level ``_*_EXTRA_*`` constants)."""
-    lines = wrap_text(label or "", _MAX_LABEL_CONTENT_WIDTH) or [""]
+    border (see the module-level ``_*_EXTRA_*`` constants).
+
+    ``label_width`` caps how wide a wrapped label line may get, which is
+    the single lever the width-fitting loop (:func:`layout_flowgraph`)
+    pulls to compact a diagram into a narrow terminal: a smaller cap makes
+    every box narrower and taller without touching topology, direction, or
+    a single character of content. It is a *wrap* budget, not a clip:
+    :func:`wrap_text` hard-breaks a word longer than the cap onto a
+    further line rather than dropping any of it, so the box always holds
+    the whole label — at the narrowest budgets that mid-word break is the
+    visible cost of fitting.
+    """
+    lines = _wrap_label(label or "", max(label_width, 1)) or [""]
     content_w = max((visual_len(line) for line in lines), default=0)
     content_h = len(lines)
 
@@ -928,9 +1065,10 @@ def _place_nodes(
     edges: list[FlowEdge],
     direction: Direction,
     node_subgraph: dict[str, str] | None = None,
+    label_width: int = _MAX_LABEL_CONTENT_WIDTH,
 ) -> dict[str, BoxRect]:
     node_subgraph = node_subgraph or {}
-    dims = {n.id: _box_dims_for_node(n) for n in nodes}
+    dims = {n.id: _box_dims_for_node(n, label_width) for n in nodes}
     native = {
         n.id: _native_extents(direction, *dims[n.id]) for n in nodes
     }
@@ -1408,7 +1546,7 @@ def _diamond_straight_span(rect: BoxRect, label: str) -> tuple[int, int]:
     if w < 5 or h < 3:
         return y + h // 2, y + h // 2
     max_taper = max(1, (w - 1) // 2)
-    content_lines = wrap_text(label or "", max(w - 4, 1)) or [""]
+    content_lines = _wrap_label(label or "", max(w - 4, 1)) or [""]
     taper = max(1, (h - len(content_lines)) // 2)
     taper = min(taper, max_taper, (h - 1) // 2 or 1)
     if h - 2 * taper < 1:
@@ -2365,29 +2503,60 @@ def _route_edge_path(
 
 
 def layout_flowgraph(g: FlowGraph, width: int) -> list[str]:
-    """Lay out and rasterize a parsed flowchart to char-grid lines.
+    """Lay out and rasterize a parsed flowchart to char-grid lines, fitting
+    the result to ``width`` where the content allows.
 
     Total function: never raises for well-typed input. An empty graph (no
     nodes) returns ``[]`` — the orchestrator (a later phase's
     ``render_flowchart``) treats that as "nothing to draw" and degrades to
     a raw echo.
 
+    Width fitting is *natural*, never destructive: the only lever pulled is
+    the node-label wrap budget (:data:`_LABEL_WIDTH_STEPS`, tried widest
+    first), which makes boxes narrower and taller. Topology, the authored
+    direction (an ``LR`` graph is never rotated to ``TB``), and every
+    character of content are preserved at every step — a diagram that
+    cannot fit even at the narrowest budget renders at its narrowest
+    achievable width and overflows rather than losing anything.
+
+    The widest budget is tried first and returned immediately when it
+    fits, so a diagram comfortably inside ``width`` costs exactly one
+    layout pass and renders at its natural, most readable proportions.
+
     Args:
         g: Parsed flowchart.
-        width: Advisory terminal width — unused. Like the other native
-            renderers in this package, layout sizes to content and may
-            overflow; wrapping happens at the node-label level, not by
-            constraining the overall canvas.
+        width: Terminal width budget in cells. A non-positive width means
+            "unconstrained" (size to content, one layout pass).
 
     Returns:
         Rendered lines: monochrome unicode box-drawing, no ANSI.
     """
-    del width
     if not g.nodes:
         return []
+    best: list[str] | None = None
+    best_w = 0
+    for label_width in _LABEL_WIDTH_STEPS:
+        lines = _layout_at_label_width(g, label_width)
+        if not lines:
+            continue
+        rendered_w = max(visual_len(line) for line in lines)
+        if best is None or rendered_w < best_w:
+            best, best_w = lines, rendered_w
+        if width <= 0 or rendered_w <= width:
+            return lines
+    return best or []
+
+
+def _layout_at_label_width(g: FlowGraph, label_width: int) -> list[str]:
+    """One full layout + rasterization pass with node labels wrapped to at
+    most ``label_width`` cells. Returns ``[]`` on an unplaceable graph or
+    any unexpected internal failure (the degradation contract
+    :func:`layout_flowgraph` inherited from its pre-fitting shape)."""
     try:
         node_subgraph = _node_subgraph_map(g.subgraphs)
-        rects = _place_nodes(g.nodes, g.edges, g.direction, node_subgraph)
+        rects = _place_nodes(
+            g.nodes, g.edges, g.direction, node_subgraph, label_width
+        )
         if not rects:
             return []
 
