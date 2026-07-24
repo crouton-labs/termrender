@@ -1,6 +1,34 @@
 # CHANGELOG
 
 
+## v4.12.1 (2026-07-24)
+
+### Bug Fixes
+
+- **mermaid**: Fit flowchart layout to the requested terminal width
+  ([`13296fc`](https://github.com/crouton-labs/termrender/commit/13296fc2220173f0e05ae16aa363493994d00735))
+
+layout_flowgraph discarded its width argument and sized purely to content, so a wide LR flowchart
+  with long labels (90 cells for a four-node chain) overflowed any narrower terminal.
+
+It now fits width naturally: the layout is retried with progressively narrower node-label wrap
+  budgets and the first result that fits is returned. Topology, the authored direction, and every
+  character of content are preserved at every step — a diagram that cannot fit even at the narrowest
+  budget renders at its narrowest achievable width rather than being clipped or rotated. The widest
+  budget is tried first, so a diagram already inside the width costs one layout pass and renders at
+  its natural proportions.
+
+Wrapping moves onto a cell-measured _wrap_label so sizing and drawing agree in display columns, and
+  box labels are written through the cell-advancing run writer — a CJK label now wraps by the
+  columns it occupies instead of running past the border it was sized to sit inside.
+
+State diagrams and the plain single-label boxes of class/ER diagrams inherit the fit; pre-formatted
+  compartments still size to content.
+
+- **mermaid**: Preserve grapheme labels
+  ([`7a918ba`](https://github.com/crouton-labs/termrender/commit/7a918baaa4be975df49f6d0472fc2cf48a2c6fcf))
+
+
 ## v4.12.0 (2026-07-23)
 
 ### Features
