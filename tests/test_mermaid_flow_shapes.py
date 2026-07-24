@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 
 from termrender.renderers.mermaid_flow import render_flowchart
+from termrender.style import visual_len
 
 _BOX_GLYPH_RE = re.compile(r"[\u2500-\u259F\u25A0-\u25FF]")
 _SLANT = set("\u2571\u2572")  # ╱ ╲ — diamond / hexagon / parallelogram tapers
@@ -163,6 +164,20 @@ def test_subgraph_frame_encloses_members_with_left_anchored_title():
         set(lines[r].strip()) <= {"\u2514", "\u2500", "\u2518"}
         for r in range(last_member_row + 1, len(lines))
     ), "expected a closing frame border below the members"
+
+
+def test_subgraph_frame_title_preserves_zwj_grapheme_clusters():
+    emoji = "👩🏽‍💻"
+    title = emoji * 8
+    lines = render_flowchart(
+        f"graph TD\nsubgraph zone[{title}]\nA[Alpha]\nend\n", width=100
+    )
+
+    title_row = next(line for line in lines if emoji in line)
+    assert title_row.count(emoji) == 8
+    assert title_row.count("\u200d") == 8
+    assert title_row.endswith("\u2510")
+    assert visual_len(title_row) == visual_len(f"\u250c\u2500 {title} \u2510")
 
 
 def test_nested_subgraphs_render_both_frames_without_overlap():

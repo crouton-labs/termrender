@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Iterator
 from typing import TYPE_CHECKING
+
+import regex
 
 if TYPE_CHECKING:
     from termrender.blocks import InlineSpan
@@ -175,28 +178,20 @@ def _char_width(c: str) -> int:
     return 1
 
 
+def grapheme_clusters(text: str) -> Iterator[str]:
+    """Yield Unicode extended grapheme clusters from ``text``."""
+    yield from regex.findall(r"\X", text)
+
+
 def visual_len(s: str) -> int:
     """Return visual display width of string, ignoring ANSI codes."""
-    stripped = ANSI_RE.sub('', s)
     width = 0
-    i = 0
-    chars = list(stripped)
-    while i < len(chars):
-        c = chars[i]
-        cp = ord(c)
-        # Check if next char is VS16 (emoji presentation selector)
-        if i + 1 < len(chars) and ord(chars[i + 1]) == 0xFE0F:
-            cw = _char_width(c)
-            # VS16 makes the preceding char display as 2 cells
-            width += max(cw, 2)
-            i += 2  # skip the VS16
-            continue
-        # VS15 (text presentation) - just skip it
-        if cp == 0xFE0E:
-            i += 1
-            continue
-        width += _char_width(c)
-        i += 1
+    for cluster in grapheme_clusters(ANSI_RE.sub('', s)):
+        cluster_width = max((_char_width(char) for char in cluster), default=0)
+        # VS16 turns the cluster into its emoji-presentation form.
+        if "\ufe0f" in cluster:
+            cluster_width = max(cluster_width, 2)
+        width += cluster_width
     return width
 
 

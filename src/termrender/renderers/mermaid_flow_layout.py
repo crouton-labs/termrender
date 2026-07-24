@@ -174,7 +174,7 @@ from termrender.renderers.mermaid_flow_model import (
     NodeShape,
     Subgraph,
 )
-from termrender.style import visual_center, visual_len
+from termrender.style import grapheme_clusters, visual_center, visual_len
 
 __all__ = ["layout_flowgraph", "Canvas", "BoxRect"]
 
@@ -190,11 +190,11 @@ def _prefix_within_cells(word: str, cells: int) -> str:
     an over-long word."""
     out: list[str] = []
     used = 0
-    for ch in word:
-        w = visual_len(ch)
+    for cluster in grapheme_clusters(word):
+        w = visual_len(cluster)
         if used + w > cells:
             break
-        out.append(ch)
+        out.append(cluster)
         used += w
     return "".join(out)
 
@@ -246,7 +246,7 @@ def _wrap_label(text: str, cells: int) -> list[str]:
                 # A single glyph wider than the entire budget: emit it
                 # anyway rather than loop forever — sizing measures the
                 # emitted lines, so the box grows to hold it.
-                chunk = word[0]
+                chunk = next(grapheme_clusters(word))
             lines.append(current + " " + chunk if current else chunk)
             current = ""
             word = word[len(chunk):]
@@ -436,9 +436,7 @@ class Canvas:
                 self.set_char(x, cy, "\u2502", reserve=True)
                 self.set_char(right, cy, "\u2502", reserve=True)
                 text = visual_center(line, inner_w) if i == 0 else " " + line
-                for j in range(inner_w):
-                    ch = text[j] if j < len(text) else " "
-                    self.set_char(inner_left + j, cy, ch, reserve=True)
+                _write_label_run(self, inner_left, cy, text, check_reserved=False)
                 cy += 1
             if i < n - 1:
                 self.set_char(x, cy, "\u251c", reserve=True)
@@ -699,24 +697,21 @@ class Canvas:
         x, y, w, h = rect.x, rect.y, rect.w, rect.h
         if w < 2 or h < 2:
             return
-        inner = w - 2
-        prefix = f"\u2500 {title} " if title else "\u2500 "
-        fill = max(inner - visual_len(prefix), 0)
-        top = "\u250c" + prefix + "\u2500" * fill + "\u2510"
-        bottom = "\u2514" + "\u2500" * inner + "\u2518"
-        for i, ch in enumerate(top[:w]):
-            self.set_char(x + i, y, ch)
-        for i, ch in enumerate(bottom[:w]):
-            self.set_char(x + i, y + h - 1, ch)
+        right = x + w - 1
+        self.set_char(x, y, "\u250c")
+        self.set_char(right, y, "\u2510")
+        self.set_char(x, y + h - 1, "\u2514")
+        self.set_char(right, y + h - 1, "\u2518")
+        for cx in range(x + 1, right):
+            self.set_char(cx, y, "\u2500")
+            self.set_char(cx, y + h - 1, "\u2500")
         for cy in range(y + 1, y + h - 1):
             self.set_char(x, cy, "\u2502")
-            self.set_char(x + w - 1, cy, "\u2502")
+            self.set_char(right, cy, "\u2502")
         if title:
-            title_start = x + 3
-            title_len = visual_len(title)
-            for i in range(title_len):
-                if title_start + i < x + w - 1:
-                    self.reserved[y][title_start + i] = True
+            self.set_char(x + 2, y, " ")
+            _write_label_run(self, x + 3, y, title, check_reserved=False)
+            self.set_char(x + 3 + visual_len(title), y, " ")
 
     def _write_line_cell(self, x: int, y: int, bits: int, style: EdgeStyle) -> None:
         if self.is_reserved(x, y):
@@ -2048,36 +2043,17 @@ def _reserve_label_margin(canvas: Canvas, x: int, y: int) -> None:
     canvas.set_char(x, y, canvas.get_char(x, y), reserve=True)
 
 
-def _label_cell_widths(label: str) -> list[int]:
-    """Per-character visual width of ``label``, as successive
-    :func:`~termrender.style.visual_len` prefix deltas — a wide
-    CJK/fullwidth character reports ``2`` here without this module
-    needing to duplicate ``visual_len``'s own east-asian-width table (the
-    deltas telescope to ``visual_len(label)`` by construction, so this
-    always agrees with the total cell count :func:`_draw_label_on_segment`
-    already reserves for the label)."""
-    widths = []
-    prev = 0
-    for i in range(1, len(label) + 1):
-        cur = visual_len(label[: i])
-        widths.append(cur - prev)
-        prev = cur
-    return widths
-
-
 def _write_label_run(
     canvas: Canvas, start: int, row: int, label: str, check_reserved: bool
 ) -> None:
     """Write ``label`` into row ``row`` starting at column ``start``,
-    advancing the write cursor by each character's own visual width (see
-    :func:`_label_cell_widths`) instead of one grid cell per Python code
-    point. A single-width character still occupies just its one cell; a
-    wide CJK/fullwidth character's glyph lands in its first cell only,
-    and the *next* cell it visually covers is marked reserved and left
-    blank — without this, that second cell stays unreserved and a
+    advancing the write cursor by each grapheme cluster's visual width
+    instead of one grid cell per Python code point. A single-cell cluster
+    occupies one cell; a two-cell cluster's glyph lands in its first cell
+    only, and the second cell is reserved and left blank. This keeps a
     connector glyph drawn earlier (edges draw before labels, see
-    :func:`layout_flowgraph`) remains visible inside the label's own
-    visual width. ``check_reserved`` mirrors the two call sites' existing
+    :func:`layout_flowgraph`) from remaining visible inside the label's
+    visual width while preserving the cluster unchanged. ``check_reserved`` mirrors the two call sites' existing
     behavior: the "clear run found" placement writes unconditionally (the
     whole run was already verified clear by the caller), the
     overflow-tolerated fallback placement instead skips any individual
@@ -2085,9 +2061,10 @@ def _write_label_run(
     box).
     """
     x = start
-    for ch, w in zip(label, _label_cell_widths(label)):
+    for cluster in grapheme_clusters(label):
+        w = visual_len(cluster)
         if not check_reserved or not canvas.is_reserved(x, row):
-            canvas.set_char(x, row, ch, reserve=True)
+            canvas.set_char(x, row, cluster, reserve=True)
         for extra in range(1, w):
             cx = x + extra
             if not check_reserved or not canvas.is_reserved(cx, row):

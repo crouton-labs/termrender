@@ -30,6 +30,7 @@ dependencies = [
     "mistune>=3.0",
     "pygments>=2.0",
     "grandalf>=0.8",
+    "regex>=2024.11.6",
 ]
 
 [project.urls]

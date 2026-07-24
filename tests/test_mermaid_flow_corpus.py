@@ -496,16 +496,24 @@ def test_wide_lr_chain_fits_width_without_losing_content_or_direction():
 
 
 def test_wide_glyph_labels_fit_width_and_stay_inside_their_boxes():
-    # Compaction is measured in display columns, not code points: a CJK
-    # label must wrap and draw by the cells it actually occupies, so no
-    # row is ever wider than the box border it sits inside.
-    source = "flowchart LR\n  A[" + "\u754c" * 16 + "] --> B[" + "\u754c" * 16 + "]\n"
+    # Compaction is measured in display columns, not code points: CJK and
+    # ZWJ emoji labels must wrap and draw by the cells they actually occupy
+    # without splitting a grapheme cluster or losing its joiner.
+    emoji = "👩🏽‍💻"
+    source = (
+        "flowchart LR\n"
+        "  A[" + "\u754c" * 16 + emoji * 4 + "] --> B[" + emoji * 4 + "\u754c" * 16 + "]\n"
+    )
     lines = _lines(source, width=60)
+    text = "".join(lines)
+    assert visual_len(emoji) == 2
     assert max(visual_len(line) for line in lines) <= 60
     border_w = {visual_len(line) for line in lines if "\u250c" in line}
     assert len(border_w) == 1
     assert all(visual_len(line) <= max(border_w) for line in lines)
-    assert "".join(lines).count("\u754c") == 32
+    assert text.count("\u754c") == 32
+    assert text.count(emoji) == 8
+    assert text.count("\u200d") == 8
 
 
 # --------------------------------------------------------------------------
