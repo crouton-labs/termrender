@@ -50,6 +50,13 @@ def test_rl_and_bt_directions():
     assert parse("graph BT\nA-->B").direction is Direction.BT
 
 
+def test_subgraph_direction_is_valid_and_recorded():
+    g = parse("flowchart TB\nsubgraph S[Group]\ndirection LR\nA-->B\nend")
+    assert g.direction is Direction.TB
+    assert g.subgraphs[0].direction is Direction.LR
+    assert [(edge.src, edge.dst) for edge in g.edges] == [("A", "B")]
+
+
 def test_semicolon_separated_statements_on_header_line():
     g = parse("graph TD; A-->B; A-->C")
     assert {n.id for n in g.nodes} == {"A", "B", "C"}

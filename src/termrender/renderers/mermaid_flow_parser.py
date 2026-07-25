@@ -47,8 +47,9 @@ Grammar covered
   display title; a bare ``subgraph Sub1`` (no brackets) uses the token as
   both id and title. Nesting is a stack: a node declared while a subgraph is
   open is added to the *innermost* currently-open subgraph's ``node_ids``
-  only (not its ancestors). An unterminated subgraph at end-of-input raises
-  :class:`FlowchartError`.
+  only (not its ancestors). A ``direction TD|TB|LR|RL|BT`` statement inside
+  a subgraph is recorded on that block (``TD`` normalizes to ``TB``). An
+  unterminated subgraph at end-of-input raises :class:`FlowchartError`.
 - Well-formed ``class``/``classDef``/``style``/``click``/``linkStyle``/
   ``accTitle``/``accDescr`` lines and ``%%`` comments are consumed and
   dropped — no trace in the model. Malformed directive-looking lines are
@@ -110,6 +111,7 @@ _HEADER_RE = re.compile(r"^(graph|flowchart)\b\s*(.*)$", re.IGNORECASE)
 _DIRECTION_RE = re.compile(r"^(TB|TD|LR|RL|BT)\b", re.IGNORECASE)
 
 _SUBGRAPH_RE = re.compile(r"^subgraph\b\s*(.*)$", re.IGNORECASE)
+_DIRECTION_STMT_RE = re.compile(r"^direction\s+(TB|TD|LR|RL|BT)$", re.IGNORECASE)
 _SUBGRAPH_ID_TITLE_RE = re.compile(r"^(\S+)\s*\[(.*)\]$", re.DOTALL)
 _END_RE = re.compile(r"^end$", re.IGNORECASE)
 _CLASSDEF_RE = re.compile(r"^classDef\b\s+\S+\s+\S.*$", re.IGNORECASE)
@@ -556,6 +558,15 @@ def parse(source: str) -> FlowGraph:
             continue
 
         if _COMMENT_RE.match(stmt):
+            continue
+
+        m = _DIRECTION_STMT_RE.match(stmt)
+        if m and stack:
+            # The terminal layout ranks the whole graph in one direction,
+            # but this is valid Mermaid syntax and must not force raw echo.
+            # Record it for fidelity even though layout does not yet
+            # re-orient this block independently.
+            stack[-1].direction = _extract_direction(m.group(1))
             continue
 
         m = _SUBGRAPH_RE.match(stmt)

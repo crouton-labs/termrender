@@ -128,12 +128,15 @@ class Subgraph:
     """A ``subgraph id [title] ... end`` block. ``node_ids`` are the ids
     declared directly inside this block (NOT those inside nested children).
     ``children`` are nested subgraphs. ``title`` is the display title (defaults
-    to id when the block has no explicit title)."""
+    to id when the block has no explicit title). ``direction`` is the block's
+    own ``direction X`` statement when it carries one (recorded for fidelity;
+    layout ranks the whole graph in the graph-level direction)."""
 
     id: str
     title: str
     node_ids: list[str] = field(default_factory=list)
     children: list["Subgraph"] = field(default_factory=list)
+    direction: Direction | None = None
 
 
 @dataclass
