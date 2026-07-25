@@ -1,6 +1,27 @@
 # CHANGELOG
 
 
+## v4.12.3 (2026-07-25)
+
+### Bug Fixes
+
+- Wrap long mermaid edge labels instead of shredding node labels
+  ([`60ee62c`](https://github.com/crouton-labs/termrender/commit/60ee62ca63decb58910e53d4f9b7e59325dff801))
+
+A long edge label was never wrapped, so its text set a hard floor under an LR/RL flowchart's width
+  (the label reads along the inter-rank gap). The width-fitting loop, which could only narrow *node*
+  labels, then chased a width the edge label already owned — breaking every node label down to the
+  6-cell floor, mid-word, while the diagram still overflowed anyway.
+
+Edge labels now wrap through the same word-wrapper node labels use and are placed as a rectangular
+  block of rows straddling the run they label. Fitting walks a ladder of (node-label, edge-label)
+  budgets whose first rung is today's wrap-nothing layout, so any diagram that already fits renders
+  byte-identically in one pass.
+
+Also: when no clear block exists at a vertical segment's own column, the label now slides along its
+  rows into clear space instead of writing straight through the boxes crossing that column.
+
+
 ## v4.12.2 (2026-07-25)
 
 ### Bug Fixes
