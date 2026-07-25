@@ -27,13 +27,13 @@ guarantee a minimum gap — this preserves grandalf's crossing-minimized
 *ordering* without trusting its raw floats for exact spacing.
 
 The caller's terminal ``width`` is fitted *naturally*: :func:`layout_flowgraph`
-retries the whole layout with progressively narrower node-label wrap
-budgets (:data:`_LABEL_WIDTH_STEPS`, widest first, threaded through
-:func:`_box_dims`) and returns the first result that fits, so boxes get
-narrower and taller while topology, the authored direction, and every
-character of content stay untouched. A diagram that already fits the
-widest budget therefore lays out exactly once and pays nothing for the
-fit.
+retries the whole layout down a ladder of ``(node-label, edge-label)`` wrap
+budgets (:data:`_FIT_LADDER`, widest and wrap-nothing first, threaded
+through :func:`_box_dims` and :func:`_edge_label_lines`) and returns the
+first result that fits, so boxes get narrower and taller and long edge
+labels become stacked blocks, while topology, the authored direction, and
+every character of content stay untouched. A diagram that already fits the
+widest rung therefore lays out exactly once and pays nothing for the fit.
 
 Rank-flow direction (``TB``/``BT``/``LR``/``RL``) is never passed to
 grandalf (it has no such parameter) — it is a post-hoc coordinate transform
@@ -94,7 +94,9 @@ final segment's direction of travel and overwrite the border cell they land
 on. Edge labels center on the path's longest straight run (or, for a
 row-stacked edge, its own dedicated jog segment specifically), shifting
 along it to the nearest cell span clear of a box, a subgraph frame title, a
-sibling edge's already-drawn line, or an already-placed label. Self-loops
+sibling edge's already-drawn line, or an already-placed label. A wrapped
+label is placed the same way as one rectangular block of rows straddling
+that run rather than a single row of text. Self-loops
 (``src == dst``, excluded from the grandalf graph) draw a small loop off the
 same side used for back-edge lanes, stacking outward per repeated self-loop
 on one node.
@@ -115,15 +117,14 @@ Known degradations (by design, not bugs)
   lines are the exception: they are pre-formatted by their caller and
   written one code point per cell (:meth:`Canvas._draw_rect_compartments`),
   so a wide-glyph class/ER compartment can still run past its border.
-- Width fitting can only narrow *node labels*, so a diagram still
-  overflows when what remains is irreducible: many ranks along the flow
-  axis (each box bottoms out at ``_MIN_LABEL_CONTENT_WIDTH + 4`` cells
-  plus its inter-rank gap), long edge labels (never wrapped — each reads
-  along one straight run of its own path, which for LR/RL sets that
-  rank gap's width outright), or pre-formatted compartments (UML/ER
-  boxes, which ignore the label budget by design). At the narrowest
-  budgets ``wrap_text`` breaks a long word mid-word rather than let the
-  box outgrow the budget — ugly, but nothing is lost.
+- Width fitting narrows *node labels* and wraps *edge labels*, so a
+  diagram still overflows when what remains is irreducible: many ranks
+  along the flow axis (each box bottoms out at
+  ``_MIN_LABEL_CONTENT_WIDTH + 4`` cells plus its inter-rank gap), or
+  pre-formatted compartments (UML/ER boxes, which ignore the label
+  budget by design). At the narrowest budgets ``wrap_text`` breaks a long
+  word mid-word rather than let the box outgrow the budget — ugly, but
+  nothing is lost.
 - Dense graphs may show edge-line crossings, and two edge labels sharing a
   crowded lane may overlap each other even after the nearest-clear-run
   shift — an accepted limit of the medium, not a routing bug.
@@ -262,6 +263,39 @@ def _wrap_label(text: str, cells: int) -> list[str]:
     if current:
         lines.append(current)
     return lines or [""]
+
+
+def _edge_label_lines(label: str | None, budget: int) -> list[str]:
+    """An edge label as the rows it is drawn on: one row per wrapped line.
+
+    ``budget <= 0`` is the unwrapped form — a single row of text, however
+    long, which is what every edge label was before wrapping existed and
+    still is whenever the diagram fits without wrapping (see
+    :data:`_FIT_LADDER`). A positive budget word-wraps through the same
+    :func:`_wrap_label` node labels use, so an edge label stops setting a
+    hard floor under an LR/RL diagram's width: it trades the horizontal
+    cells its text would have demanded of the inter-rank gap for extra
+    rows stacked around the run it labels
+    (:func:`_draw_label_on_segment`).
+
+    An empty/absent label has no rows at all — callers treat that as
+    "unlabeled" and skip every label-driven sizing and drawing path.
+    """
+    if not label:
+        return []
+    if budget <= 0:
+        return [label]
+    return [line for line in _wrap_label(label, budget) if line] or [label]
+
+
+def _edge_label_extent(label: str | None, budget: int) -> tuple[int, int]:
+    """``(widest line in cells, number of rows)`` for a wrapped edge label —
+    what the gap/lane sizing passes need to reserve room for. ``(0, 0)``
+    for an unlabeled edge."""
+    lines = _edge_label_lines(label, budget)
+    if not lines:
+        return 0, 0
+    return max(visual_len(line) for line in lines), len(lines)
 
 
 # --------------------------------------------------------------------------
@@ -854,6 +888,31 @@ _MIN_BOX_H = 3
 _MIN_LABEL_CONTENT_WIDTH = 6
 _LABEL_WIDTH_STEPS = (_MAX_LABEL_CONTENT_WIDTH, 16, 12, 9, 7, _MIN_LABEL_CONTENT_WIDTH)
 
+# Width-fitting ladder: ``(node_label_width, edge_label_width)`` pairs tried
+# in order by :func:`layout_flowgraph`, first one that fits wins. An edge
+# budget of ``0`` means "never wrap this edge label" — one straight run of
+# text, the only shape a label had before wrapping existed — and the whole
+# first tier uses it, so any diagram that fits without wrapping renders
+# exactly as it always has, at its natural proportions, in one pass.
+#
+# Beyond that tier the ordering encodes which sacrifice reads worse. A long
+# edge label sets a hard floor on an LR/RL diagram's width (its text runs
+# along the inter-rank gap, so the gap can never be narrower than the text),
+# and no amount of node-label narrowing touches that floor — narrowing nodes
+# to chase a width the edge label already owns just shreds every node label
+# into syllables for nothing. So edge wrapping is tried while node labels are
+# still comfortably wide, and the syllable-narrow node tiers are last resort,
+# reached only by a diagram whose width is genuinely irreducible otherwise
+# (many ranks, or no edge labels at all to wrap).
+_FIT_LADDER = (
+    (20, 0), (20, 32), (20, 20), (20, 14),
+    (16, 0), (16, 32), (16, 20), (16, 14),
+    (12, 0), (12, 32), (12, 20), (12, 14),
+    (9, 0), (9, 14),
+    (7, 0), (7, 14),
+    (6, 0), (6, 14),
+)
+
 # Per-shape extra cells added around the base rect sizing, so the interior
 # usable area (where the wrapped label actually lands) is never smaller than
 # a plain rect would give it — shapes whose border eats into the bounding
@@ -982,7 +1041,10 @@ _LABELED_ROW_GAP = 3  # inter-rank gap when a label sits on that band's vertical
 
 
 def _rank_gap_overrides(
-    edges: list[FlowEdge], rank_of: dict[str, int], direction: Direction
+    edges: list[FlowEdge],
+    rank_of: dict[str, int],
+    direction: Direction,
+    edge_label_width: int = 0,
 ) -> dict[int, int]:
     """Minimum inter-rank-band gap keyed by the *lower* rank of each
     adjacent-rank transition, widened past ``_ROW_GAP`` wherever a labeled
@@ -995,17 +1057,18 @@ def _rank_gap_overrides(
     adapter docstring) — whether that ends up as *vertical* or
     *horizontal* space on screen depends on ``direction``. For LR/RL the
     transpose turns this band into the final horizontal run the label
-    reads along, so it genuinely needs ``visual_len(label)`` cells of
-    width — at the base ``_ROW_GAP`` a label wider than a couple of cells
-    has nowhere to go but onto the boxes it connects (the short
+    reads along, so it genuinely needs the label's widest wrapped line in
+    cells of width — at the base ``_ROW_GAP`` a label wider than a couple
+    of cells has nowhere to go but onto the boxes it connects (the short
     LR/adjacent-rank clipped-label bug this closes); when several labeled
     edges share one LR/RL transition their labels land at different
     *secondary* (row) coordinates already (different destination nodes),
     so only the widest single label's width matters here, not the count.
     For TB/BT the band stays vertical on screen and each label is drawn
     horizontally *across* the connector column (:func:`_draw_label_on_segment`'s
-    vertical-segment branch), one label per row — a single labeled edge
-    needs only the small constant ``_LABELED_ROW_GAP`` (one blank row, the
+    vertical-segment branch), one label per row (plus one more row per
+    wrapped line past the first, when ``edge_label_width`` wraps it) — a
+    single labeled edge needs only the small constant ``_LABELED_ROW_GAP`` (one blank row, the
     label's own row, one more blank row), but when ``n`` labeled edges
     cross the *same* adjacent-rank transition (e.g. one node forward-fans
     into several labeled destinations, or several labeled sources converge
@@ -1031,10 +1094,14 @@ def _rank_gap_overrides(
         if hi_r - lo_r != 1:
             continue
         counts[lo_r] += 1
+        text_w, rows = _edge_label_extent(e.label, edge_label_width)
         if horizontal_on_screen:
-            needed = visual_len(e.label) + 2 * _LABEL_GAP_PAD
+            needed = text_w + 2 * _LABEL_GAP_PAD
         else:
-            needed = _LABELED_ROW_GAP
+            # A wrapped label stacks its extra rows into this same band
+            # (see _draw_label_on_segment's vertical branch), so the gap
+            # grows one row per line past the first.
+            needed = _LABELED_ROW_GAP + (rows - 1)
         overrides[lo_r] = max(overrides.get(lo_r, _ROW_GAP), needed)
     if not horizontal_on_screen:
         for lo_r, n in counts.items():
@@ -1061,6 +1128,7 @@ def _place_nodes(
     direction: Direction,
     node_subgraph: dict[str, str] | None = None,
     label_width: int = _MAX_LABEL_CONTENT_WIDTH,
+    edge_label_width: int = 0,
 ) -> dict[str, BoxRect]:
     node_subgraph = node_subgraph or {}
     dims = {n.id: _box_dims_for_node(n, label_width) for n in nodes}
@@ -1102,7 +1170,9 @@ def _place_nodes(
             ranks[sug.grx[v].rank].append(v)
 
         rank_of = {v.data: sug.grx[v].rank for v in comp_vertices}
-        gap_overrides = _rank_gap_overrides(edges, rank_of, direction)
+        gap_overrides = _rank_gap_overrides(
+            edges, rank_of, direction, edge_label_width
+        )
 
         band_top_for_rank: dict[int, int] = {}
         cursor = 0
@@ -1909,7 +1979,10 @@ def _lane_path(
 
 
 def _lane_offsets(
-    rects: dict[str, BoxRect], direction: Direction, edges: list[FlowEdge]
+    rects: dict[str, BoxRect],
+    direction: Direction,
+    edges: list[FlowEdge],
+    edge_label_width: int = 0,
 ) -> dict[int, int]:
     """Per-back-edge lane-column offset (added atop :func:`_lane_secondary_base`),
     one entry per index into ``edges`` — every back-edge gets an entry, in
@@ -1934,7 +2007,8 @@ def _lane_offsets(
             continue
         if _classify_edge(rects, direction, e) != "back":
             continue
-        half = visual_len(e.label) // 2 + 1 if e.label else 0
+        text_w, _rows = _edge_label_extent(e.label, edge_label_width)
+        half = text_w // 2 + 1 if text_w else 0
         if seen_any:
             total += max(_LANE_GAP, prev_half + half + 1)
         offsets[i] = total
@@ -2176,11 +2250,89 @@ def _row_clear_span(
     return left, right
 
 
+def _write_label_block(
+    canvas: Canvas,
+    start: int,
+    top: int,
+    length: int,
+    lines: list[str],
+    check_reserved: bool,
+    margins: bool = True,
+) -> None:
+    """Write a wrapped label's lines as one block whose left edge is
+    ``start`` and whose top row is ``top``, each line centered within the
+    block's ``length`` columns and each row given the same one-cell
+    margin a single-run label gets (:func:`_reserve_label_margin`). A
+    one-line block is byte-for-byte the single :func:`_write_label_run`
+    call this router made before labels could wrap.
+    """
+    for k, line in enumerate(lines):
+        x = start + (length - visual_len(line)) // 2
+        _write_label_run(canvas, x, top + k, line, check_reserved=check_reserved)
+        if margins:
+            _reserve_label_margin(canvas, start - 1, top + k)
+            _reserve_label_margin(canvas, start + length, top + k)
+
+
+def _try_place_label_block(
+    canvas: Canvas,
+    lines: list[str],
+    length: int,
+    top: int,
+    lo: int,
+    hi: int,
+    center: int,
+    seg_lo: int,
+    seg_hi: int,
+    strict_scoped: bool,
+    strict_blocked: Callable[[int, int], bool],
+    loose_blocked: Callable[[int, int], bool],
+) -> bool:
+    """Try to land a label block of ``len(lines)`` rows, top row ``top``,
+    somewhere in the clear span ``[lo, hi]`` of a horizontal segment;
+    ``True`` when it was written.
+
+    Two tiers, strict then loose (see :func:`_draw_label_on_segment` for
+    what each predicate treats as blocked). ``strict_scoped`` narrows the
+    strict tier's window to the segment's own extent: strict's window
+    matches the widened ``[lo, hi]`` only when *both* of the segment's
+    endpoints are genuine interior bends — that's the case the widening
+    exists for (a short jog far shorter than its own label, needing the
+    row's real floor space to find a bend-avoiding spot at all). When
+    either endpoint is instead the edge's own exit/entry anchor, widening
+    strict's search the same way lets it wander away from that anchor into
+    unrelated floor space back toward the segment's far end — wrong
+    specifically because that anchor (an arrowhead, typically) is exactly
+    what the label should stay adjacent to. Loose always keeps the full
+    widened window regardless, since it's the fallback tier that exists to
+    use that extra room.
+    """
+    height = len(lines)
+    if strict_scoped:
+        strict_lo, strict_hi = max(lo, seg_lo), min(hi, seg_hi)
+    else:
+        strict_lo, strict_hi = lo, hi
+    for check, w_lo, w_hi in (
+        (strict_blocked, strict_lo, strict_hi),
+        (loose_blocked, lo, hi),
+    ):
+        for start in _label_positions(length, center, w_lo, w_hi):
+            block = [
+                (start + i, top + k) for k in range(height) for i in range(length)
+            ]
+            if not any(check(x, y) for x, y in block):
+                _write_label_block(
+                    canvas, start, top, length, lines, check_reserved=False
+                )
+                return True
+    return False
+
+
 def _draw_label_on_segment(
     canvas: Canvas,
     a: tuple[int, int],
     b: tuple[int, int],
-    label: str,
+    label: str | list[str],
     path_ends: tuple[tuple[int, int], tuple[int, int]] | None = None,
 ) -> None:
     """Center ``label`` on the straight run ``a``-``b``. A label always
@@ -2217,9 +2369,17 @@ def _draw_label_on_segment(
     corner, where the line turns but doesn't terminate, reads as fused
     when a label butts against it with no separating cell.
     """
-    length = visual_len(label)
-    if length <= 0:
+    # A wrapped label (see :func:`_edge_label_lines`) arrives as several
+    # lines and is placed as one rectangular block: the block is what the
+    # clear-run search tests and reserves, and each line is centered
+    # within it. A one-line block is the single-run placement this router
+    # has always done, cell for cell.
+    lines = [label] if isinstance(label, str) else list(label)
+    lines = [line for line in lines if visual_len(line) > 0]
+    if not lines:
         return
+    length = max(visual_len(line) for line in lines)
+    height = len(lines)
     (x0, y0), (x1, y1) = a, b
     # Two predicates, not one, because a segment's own two endpoints play
     # two different roles. ``loose`` (every cell of the segment, corners
@@ -2265,43 +2425,43 @@ def _draw_label_on_segment(
         # Horizontal segment: search along x for a clear run at row y0,
         # widened to the row's real clear span (see _row_clear_span).
         seg_lo, seg_hi = (x0, x1) if x0 <= x1 else (x1, x0)
-        row = y0
         center = (seg_lo + seg_hi) // 2
-        lo, hi = _row_clear_span(row, center, loose_blocked)
-        # strict's search window matches the widened [lo, hi] only when
-        # *both* of this segment's endpoints are genuine interior bends
-        # (see path_ends above) — that's the case the widening exists for
-        # (Problem 1: a short jog far shorter than its own label, needing
-        # the row's real floor space to find a bend-avoiding spot at all).
-        # When either endpoint is instead the edge's own exit/entry anchor,
-        # widening strict's search the same way lets it wander away from
-        # that anchor into unrelated floor space back toward the segment's
-        # far end — wrong specifically because that anchor (an arrowhead,
-        # typically) is exactly what the label should stay adjacent to,
-        # so strict is scoped to the segment's own natural extent there
-        # instead; loose always keeps the full widened window regardless,
-        # since it's the fallback tier that exists to use that extra room.
-        if len(bend_corners) == 2:
-            strict_lo, strict_hi = lo, hi
-        else:
-            strict_lo, strict_hi = max(lo, seg_lo), min(hi, seg_hi)
-
-        def cells(start: int) -> list[tuple[int, int]]:
-            return [(start + i, row) for i in range(length)]
-
-        for check, w_lo, w_hi in (
-            (strict_blocked, strict_lo, strict_hi),
-            (loose_blocked, lo, hi),
-        ):
-            for start in _label_positions(length, center, w_lo, w_hi):
-                run = cells(start)
-                if not any(check(x, y) for x, y in run):
-                    _write_label_run(canvas, start, row, label, check_reserved=False)
-                    _reserve_label_margin(canvas, start - 1, row)
-                    _reserve_label_margin(canvas, start + length, row)
-                    return
-        start = max(lo, min(center - length // 2, hi - length + 1))
-        _write_label_run(canvas, start, row, label, check_reserved=True)
+        # A multi-line label needs a *band* of rows straddling the run it
+        # labels, so the candidate top rows are every band that still
+        # contains the segment's own row, nearest-centered first (for a
+        # single-line label that is the segment's row itself, and this
+        # whole loop collapses to the one placement it always did).
+        ideal_top = y0 - (height - 1) // 2
+        tops = sorted(
+            range(max(0, y0 - height + 1), y0 + 1), key=lambda t: abs(t - ideal_top)
+        ) or [y0]
+        fallback: tuple[int, int] | None = None
+        for top in tops:
+            rows = range(top, top + height)
+            spans = [_row_clear_span(r, center, loose_blocked) for r in rows]
+            lo, hi = max(s[0] for s in spans), min(s[1] for s in spans)
+            if fallback is None:
+                fallback = (top, max(lo, min(center - length // 2, hi - length + 1)))
+            if hi - lo + 1 < length:
+                continue
+            placed = _try_place_label_block(
+                canvas,
+                lines,
+                length,
+                top,
+                lo,
+                hi,
+                center,
+                seg_lo,
+                seg_hi,
+                strict_scoped=len(bend_corners) != 2,
+                strict_blocked=strict_blocked,
+                loose_blocked=loose_blocked,
+            )
+            if placed:
+                return
+        top, start = fallback if fallback is not None else (y0, seg_lo)
+        _write_label_block(canvas, start, top, length, lines, check_reserved=True)
         return
 
     # Vertical segment: the label still reads horizontally, centered on
@@ -2321,7 +2481,9 @@ def _draw_label_on_segment(
     start_x = max(0, col - length // 2)
 
     def row_cells(row: int) -> list[tuple[int, int]]:
-        return [(start_x + i, row) for i in range(length)]
+        return [
+            (start_x + i, row + k) for k in range(height) for i in range(length)
+        ]
 
     def buffered_row_cells(row: int) -> list[tuple[int, int]]:
         # The label's own cells plus one buffer cell each side — the same
@@ -2331,7 +2493,14 @@ def _draw_label_on_segment(
         # columns can sit only _LANE_GAP cells apart, close enough that an
         # unbuffered row search would happily land one label's edge
         # directly against the neighboring lane's connector line.
-        return [(start_x - 1, row), *row_cells(row), (start_x + length, row)]
+        return [
+            *(
+                cell
+                for k in range(height)
+                for cell in ((start_x - 1, row + k), (start_x + length, row + k))
+            ),
+            *row_cells(row),
+        ]
 
     def find_row(cells_fn: Callable[[int], list[tuple[int, int]]]) -> int | None:
         for check in (strict_blocked, loose_blocked):
@@ -2341,7 +2510,16 @@ def _draw_label_on_segment(
         return None
 
     center_row = (lo + hi) // 2
-    candidates = _label_positions(1, center_row, lo, hi)
+    # A wrapped label occupies ``height`` consecutive rows, so the search
+    # is over block *tops* that fit inside the segment's own y-span; when
+    # the span is shorter than the block (a short lane leg with a tall
+    # label) it falls back to single-row candidates and the block simply
+    # extends past the span, same overflow tolerance as the final
+    # best-effort write below. For a one-line label both are the identical
+    # row list this branch has always searched.
+    candidates = _label_positions(height, center_row, lo, hi) or _label_positions(
+        1, center_row, lo, hi
+    ) or [center_row]
     # Prefer a row with the buffer cells clear too; fall back to a row
     # that's merely not overlapping the label's own cells when the column
     # is crowded enough that no row has buffer room to spare — mirrors
@@ -2350,10 +2528,36 @@ def _draw_label_on_segment(
     if row is None:
         row = find_row(row_cells)
     if row is not None:
-        _write_label_run(canvas, start_x, row, label, check_reserved=False)
-        _reserve_label_margin(canvas, start_x - 1, row)
-        _reserve_label_margin(canvas, start_x + length, row)
+        _write_label_block(canvas, start_x, row, length, lines, check_reserved=False)
         return
+    # Still nothing: relax the "column never shifts" rule, which is a
+    # readability preference, not a constraint — a label that slides a few
+    # cells along its row is still plainly attached to its line, whereas
+    # the best-effort write below lands *through* whatever boxes sit
+    # across the lane's own column and loses the cells it collides with.
+    # This tier is the horizontal branch's own algorithm, run over the
+    # block's rows with the lane column as the ideal center.
+    for top in candidates:
+        rows = range(top, top + height)
+        spans = [_row_clear_span(r, col, loose_blocked) for r in rows]
+        span_lo, span_hi = max(s[0] for s in spans), min(s[1] for s in spans)
+        if span_hi - span_lo + 1 < length:
+            continue
+        if _try_place_label_block(
+            canvas,
+            lines,
+            length,
+            top,
+            span_lo,
+            span_hi,
+            col,
+            col,
+            col,
+            strict_scoped=False,
+            strict_blocked=strict_blocked,
+            loose_blocked=loose_blocked,
+        ):
+            return
     # No row within the segment's own span was fully clear even under the
     # loose check — pick whichever row has the fewest blocked cells
     # (best effort) and write there, skipping only genuinely reserved
@@ -2363,7 +2567,7 @@ def _draw_label_on_segment(
         candidates,
         key=lambda row: sum(1 for x, y in row_cells(row) if loose_blocked(x, y)),
     )
-    _write_label_run(canvas, start_x, best_row, label, check_reserved=True)
+    _write_label_block(canvas, start_x, best_row, length, lines, check_reserved=True)
 
 
 def _draw_polyline(canvas: Canvas, points: list[tuple[int, int]], style: EdgeStyle) -> None:
@@ -2488,17 +2692,22 @@ def layout_flowgraph(g: FlowGraph, width: int) -> list[str]:
     ``render_flowchart``) treats that as "nothing to draw" and degrades to
     a raw echo.
 
-    Width fitting is *natural*, never destructive: the only lever pulled is
-    the node-label wrap budget (:data:`_LABEL_WIDTH_STEPS`, tried widest
-    first), which makes boxes narrower and taller. Topology, the authored
-    direction (an ``LR`` graph is never rotated to ``TB``), and every
-    character of content are preserved at every step — a diagram that
-    cannot fit even at the narrowest budget renders at its narrowest
-    achievable width and overflows rather than losing anything.
+    Width fitting is *natural*, never destructive: the two levers pulled
+    are the node-label wrap budget (narrower, taller boxes) and the
+    edge-label wrap budget (a long label becomes a stacked block instead
+    of one long run, so it stops setting a floor under an LR/RL diagram's
+    width). :data:`_FIT_LADDER` orders every combination of the two.
+    Topology, the authored direction (an ``LR`` graph is never rotated to
+    ``TB``), and every character of content are preserved at every step —
+    a diagram that cannot fit even at the narrowest budgets renders at its
+    narrowest achievable width and overflows rather than losing anything.
 
-    The widest budget is tried first and returned immediately when it
-    fits, so a diagram comfortably inside ``width`` costs exactly one
-    layout pass and renders at its natural, most readable proportions.
+    The widest, wrap-nothing rung is tried first and returned immediately
+    when it fits, so a diagram comfortably inside ``width`` costs exactly
+    one layout pass and renders at its natural, most readable proportions.
+    Rungs that would render identically to one already tried (an edge
+    budget no label is long enough to reach) are skipped rather than
+    re-laid-out.
 
     Args:
         g: Parsed flowchart.
@@ -2510,10 +2719,20 @@ def layout_flowgraph(g: FlowGraph, width: int) -> list[str]:
     """
     if not g.nodes:
         return []
+    longest_edge_label = max(
+        (visual_len(e.label) for e in g.edges if e.label), default=0
+    )
     best: list[str] | None = None
     best_w = 0
-    for label_width in _LABEL_WIDTH_STEPS:
-        lines = _layout_at_label_width(g, label_width)
+    seen: set[tuple[int, int]] = set()
+    for label_width, edge_width in _FIT_LADDER:
+        # An edge budget wide enough to hold every label wraps nothing, so
+        # it is the same layout as the unwrapped rung at this node width.
+        effective_edge = 0 if edge_width >= longest_edge_label else edge_width
+        if (label_width, effective_edge) in seen:
+            continue
+        seen.add((label_width, effective_edge))
+        lines = _layout_at_label_width(g, label_width, effective_edge)
         if not lines:
             continue
         rendered_w = max(visual_len(line) for line in lines)
@@ -2524,15 +2743,20 @@ def layout_flowgraph(g: FlowGraph, width: int) -> list[str]:
     return best or []
 
 
-def _layout_at_label_width(g: FlowGraph, label_width: int) -> list[str]:
+def _layout_at_label_width(
+    g: FlowGraph, label_width: int, edge_label_width: int = 0
+) -> list[str]:
     """One full layout + rasterization pass with node labels wrapped to at
-    most ``label_width`` cells. Returns ``[]`` on an unplaceable graph or
+    most ``label_width`` cells and edge labels to ``edge_label_width``
+    (``0`` — the default and every pre-wrapping caller — leaves edge
+    labels as one unwrapped run). Returns ``[]`` on an unplaceable graph or
     any unexpected internal failure (the degradation contract
     :func:`layout_flowgraph` inherited from its pre-fitting shape)."""
     try:
         node_subgraph = _node_subgraph_map(g.subgraphs)
         rects = _place_nodes(
-            g.nodes, g.edges, g.direction, node_subgraph, label_width
+            g.nodes, g.edges, g.direction, node_subgraph, label_width,
+            edge_label_width,
         )
         if not rects:
             return []
@@ -2582,7 +2806,9 @@ def _layout_at_label_width(g: FlowGraph, label_width: int) -> list[str]:
             rects, g.direction, g.edges, g.nodes
         )
         row_overrides = _forward_row_overrides(rects, g.direction, g.edges)
-        lane_offsets = _lane_offsets(rects, g.direction, g.edges)
+        lane_offsets = _lane_offsets(
+            rects, g.direction, g.edges, edge_label_width
+        )
         edge_paths: list[tuple[int, FlowEdge, list[tuple[int, int]]]] = []
         for i, e in enumerate(g.edges):
             points = _route_edge_path(
@@ -2638,7 +2864,10 @@ def _layout_at_label_width(g: FlowGraph, label_width: int) -> list[str]:
                 seg = _longest_segment(points)
             if seg is not None:
                 _draw_label_on_segment(
-                    canvas, *seg, e.label, path_ends=(points[0], points[-1])
+                    canvas,
+                    *seg,
+                    _edge_label_lines(e.label, edge_label_width),
+                    path_ends=(points[0], points[-1]),
                 )
         return canvas.to_lines()
     except Exception:

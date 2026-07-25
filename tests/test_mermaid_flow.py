@@ -360,3 +360,34 @@ def test_render_flowchart_never_raises_and_degrades_cleanly_on_garbage_input():
             assert lines == [line.rstrip() for line in source.splitlines()], (
                 f"degraded output for {source!r} must be an exact raw echo, got {lines!r}"
             )
+
+
+# --------------------------------------------------------------------------
+# Long edge labels wrap instead of shredding node labels
+# --------------------------------------------------------------------------
+
+
+def test_long_edge_label_wraps_rather_than_forcing_node_labels_into_syllables():
+    """A long edge label used to set an unreachable floor under an LR
+    diagram's width: it never wrapped, so the width-fitting loop shredded
+    every *node* label down to the 6-cell floor chasing a width the edge
+    label already owned, and the diagram still overflowed. The label now
+    wraps into a stacked block, so the diagram fits and node labels keep
+    their words intact."""
+    source = (
+        "flowchart LR\n"
+        '  A["~/.crouter/canvas"] -->'
+        '|"reachable via symlink, never opened - CRTR_HOME points away"|'
+        ' B["/home/agent/.crouter"]\n'
+    )
+    lines = render_flowchart(source, width=100)
+    assert lines
+    assert max(len(line) for line in lines) <= 100
+    text = "\n".join(lines)
+    # Whole words, not the "~/.crout / er/canva / s" syllable column the
+    # narrowest node-label budget produced.
+    assert "~/.crouter/canvas" in text
+    assert "/home/agent/.crouter" in text
+    # The edge label is still there in full, just across several rows.
+    for word in ("reachable", "symlink,", "CRTR_HOME", "away"):
+        assert word in text
