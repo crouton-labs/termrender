@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v4.12.2 (2026-07-25)
+
+### Bug Fixes
+
+- Accept subgraph direction statements
+  ([`8ded657`](https://github.com/crouton-labs/termrender/commit/8ded657804952df7ee33e39eb02fca9cf81c8172))
+
+### Documentation
+
+- Record renderer release handoff
+  ([`bb6d7f8`](https://github.com/crouton-labs/termrender/commit/bb6d7f8f989b4ad514f5ac98606bd4a20a5c30c4))
+
+
 ## v4.12.1 (2026-07-24)
 
 ### Bug Fixes
