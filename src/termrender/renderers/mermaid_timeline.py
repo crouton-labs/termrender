@@ -25,6 +25,7 @@ from __future__ import annotations
 import re
 
 from termrender.blocks import Block, BlockType
+from termrender.renderers.mermaid_text import decode_entities
 from termrender.renderers.timeline import render as render_timeline
 from termrender.style import visual_ljust
 
@@ -59,19 +60,19 @@ def parse_timeline(source: str) -> dict:
 
         m = _TITLE_RE.match(line)
         if m:
-            title = m.group(1)
+            title = decode_entities(m.group(1))
             continue
 
         m = _SECTION_RE.match(line)
         if m:
-            sections.append({"name": m.group(1), "entries": []})
+            sections.append({"name": decode_entities(m.group(1)), "entries": []})
             continue
 
         if ":" not in line:
             continue
         period_raw, _, rest = line.partition(":")
-        period = period_raw.strip()
-        events = [e.strip() for e in rest.split(":") if e.strip()]
+        period = decode_entities(period_raw.strip())
+        events = [decode_entities(e.strip()) for e in rest.split(":") if e.strip()]
         if not events:
             continue
         if period:

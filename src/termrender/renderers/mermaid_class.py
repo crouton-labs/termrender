@@ -92,6 +92,7 @@ from termrender.renderers.mermaid_flow_model import (
     NodeShape,
 )
 from termrender.renderers.mermaid_prelude import strip_prelude_lines
+from termrender.renderers.mermaid_text import decode_entities
 
 __all__ = ["render_class", "ClassDiagramError"]
 
@@ -158,8 +159,9 @@ class _ClassDef:
 
 
 def _format_generics(text: str) -> str:
-    """``List~T~`` -> ``List<T>`` (also handles multi-param ``Map~K, V~``)."""
-    return _GENERIC_RE.sub(r"<\1>", text)
+    """``List~T~`` -> ``List<T>`` (also handles multi-param ``Map~K, V~``),
+    and decode any entity code the author escaped."""
+    return _GENERIC_RE.sub(r"<\1>", decode_entities(text))
 
 
 def _strip_generics_id(token: str) -> str:

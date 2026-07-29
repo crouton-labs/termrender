@@ -12,6 +12,7 @@ import re
 
 from termrender.renderers.mermaid_degradation import raw_echo
 from termrender.renderers.mermaid_prelude import strip_prelude_lines
+from termrender.renderers.mermaid_text import decode_entities
 
 
 _ATTRIBUTE = re.compile(
@@ -39,7 +40,9 @@ def _attributes(text: str) -> dict[str, list[str]]:
             if match.group("quoted") is not None
             else match.group("bare")
         )
-        attrs.setdefault(match.group("key").lower(), []).append(value.replace('\\"', '"'))
+        attrs.setdefault(match.group("key").lower(), []).append(
+            decode_entities(value.replace('\\"', '"'))
+        )
     return attrs
 
 

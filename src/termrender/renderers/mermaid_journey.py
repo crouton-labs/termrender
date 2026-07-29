@@ -25,6 +25,7 @@ from __future__ import annotations
 import re
 
 from termrender.blocks import Block, BlockType
+from termrender.renderers.mermaid_text import decode_entities
 from termrender.renderers.tree import render as render_tree
 from termrender.style import visual_ljust
 
@@ -57,18 +58,18 @@ def parse_journey(source: str) -> dict:
 
         m = _TITLE_RE.match(line)
         if m:
-            title = m.group(1)
+            title = decode_entities(m.group(1))
             continue
 
         m = _SECTION_RE.match(line)
         if m:
-            sections.append({"name": m.group(1), "tasks": []})
+            sections.append({"name": decode_entities(m.group(1)), "tasks": []})
             continue
 
         if ":" not in line:
             continue
         parts = line.split(":", 2)
-        name = parts[0].strip()
+        name = decode_entities(parts[0].strip())
         if not name:
             continue
         score: int | None = None
@@ -78,7 +79,9 @@ def parse_journey(source: str) -> dict:
             if score_str.lstrip("-").isdigit():
                 score = int(score_str)
         if len(parts) >= 3:
-            actors = [a.strip() for a in parts[2].split(",") if a.strip()]
+            actors = [
+                decode_entities(a.strip()) for a in parts[2].split(",") if a.strip()
+            ]
         sections[-1]["tasks"].append({"name": name, "score": score, "actors": actors})
 
     sections = [s for s in sections if s["tasks"]]

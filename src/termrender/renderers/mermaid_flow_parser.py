@@ -95,6 +95,7 @@ from termrender.renderers.mermaid_flow_model import (
     Subgraph,
 )
 from termrender.renderers.mermaid_prelude import strip_prelude_lines
+from termrender.renderers.mermaid_text import decode_entities
 
 __all__ = ["parse", "FlowchartError"]
 
@@ -198,21 +199,22 @@ def _strip_quotes(text: str) -> str:
 
 
 def _norm_label(text: str | None) -> str | None:
-    """Normalize an *edge* label: strip wrapping quotes and flatten
-    ``<br/>`` to a space — edge labels render on a single line along the
-    path, so a hard break has nowhere to go."""
+    """Normalize an *edge* label: strip wrapping quotes, decode entity codes,
+    and flatten ``<br/>`` to a space — edge labels render on a single line
+    along the path, so a hard break has nowhere to go."""
     if text is None:
         return None
     stripped = _BR_RE.sub(" ", _strip_quotes(text.strip()))
     stripped = re.sub(r"\s*\n\s*", " ", stripped).strip()
-    return stripped or None
+    return decode_entities(stripped) or None
 
 
 def _norm_node_label(text: str) -> str:
-    """Normalize a *node* label: strip wrapping quotes and turn ``<br/>``
-    into a real newline — node labels are drawn via ``wrap_text``, which
-    honors ``\\n``, for both box sizing and label placement."""
-    return _BR_RE.sub("\n", _strip_quotes(text)).strip()
+    """Normalize a *node* label: strip wrapping quotes, decode entity codes,
+    and turn ``<br/>`` into a real newline — node labels are drawn via
+    ``wrap_text``, which honors ``\\n``, for both box sizing and label
+    placement."""
+    return decode_entities(_BR_RE.sub("\n", _strip_quotes(text)).strip())
 
 
 def _bracket_depths(text: str) -> list[int]:
@@ -357,9 +359,9 @@ def _parse_subgraph_header(rest: str) -> tuple[str, str]:
         sub_id = m.group(1).strip()
         # Subgraph titles render on a single header line, so <br/> flattens
         # to a space (same as edge labels).
-        title = _BR_RE.sub(" ", _strip_quotes(m.group(2).strip())).strip()
+        title = decode_entities(_BR_RE.sub(" ", _strip_quotes(m.group(2).strip())).strip())
         return sub_id, (title or sub_id)
-    bare = _BR_RE.sub(" ", rest.strip().strip('"')).strip()
+    bare = decode_entities(_BR_RE.sub(" ", rest.strip().strip('"')).strip())
     return bare, bare
 
 

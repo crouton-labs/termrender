@@ -29,6 +29,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, timedelta
 
+from termrender.renderers.mermaid_text import decode_entities
 from termrender.style import visual_len, visual_ljust
 
 _HEADER_RE = re.compile(r"^\s*gantt\b", re.IGNORECASE)
@@ -257,7 +258,7 @@ def _parse_gantt(source: str) -> dict:
 
         m = _TITLE_RE.match(line)
         if m:
-            title = m.group(1)
+            title = decode_entities(m.group(1))
             continue
 
         m = _DATEFORMAT_RE.match(line)
@@ -270,7 +271,7 @@ def _parse_gantt(source: str) -> dict:
 
         m = _SECTION_RE.match(line)
         if m:
-            sections.append({"name": m.group(1), "tasks": []})
+            sections.append({"name": decode_entities(m.group(1)), "tasks": []})
             continue
 
         m = _EXCLUDES_RE.match(line)
@@ -288,7 +289,7 @@ def _parse_gantt(source: str) -> dict:
         if ":" not in line:
             continue
         label, _, spec = line.partition(":")
-        label = label.strip()
+        label = decode_entities(label.strip())
         if not label:
             continue
 

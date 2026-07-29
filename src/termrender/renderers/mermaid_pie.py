@@ -27,6 +27,7 @@ import re
 
 from termrender.blocks import Block, BlockType
 from termrender.renderers.charts import render_bar
+from termrender.renderers.mermaid_text import decode_entities
 
 _TITLE_RE = re.compile(r"^\s*title\s+(.*\S)\s*$", re.IGNORECASE)
 _ACC_RE = re.compile(r"^\s*acc(?:Title|Descr)\b", re.IGNORECASE)
@@ -40,7 +41,7 @@ _DATA_RE = re.compile(
 
 
 def _unescape_double_quoted(label: str) -> str:
-    return label.replace('\\"', '"').replace("\\\\", "\\")
+    return decode_entities(label.replace('\\"', '"').replace("\\\\", "\\"))
 
 
 def parse_pie(source: str) -> tuple[str | None, list[dict]]:
@@ -85,7 +86,7 @@ def parse_pie(source: str) -> tuple[str | None, list[dict]]:
             if m.group(1) is not None:
                 label = _unescape_double_quoted(m.group(1))
             else:
-                label = m.group(2)
+                label = decode_entities(m.group(2))
             value = float(m.group(3))
             if value < 0 or not math.isfinite(value):
                 return None, []

@@ -102,6 +102,7 @@ from termrender.renderers.mermaid_flow_model import (
     Subgraph,
 )
 from termrender.renderers.mermaid_prelude import strip_prelude_lines
+from termrender.renderers.mermaid_text import decode_entities
 
 __all__ = ["render_state", "StateDiagramError"]
 
@@ -176,7 +177,7 @@ class _Scope:
 def _norm_label(text: str | None) -> str | None:
     if text is None:
         return None
-    stripped = text.strip()
+    stripped = decode_entities(text.strip())
     return stripped or None
 
 
@@ -261,7 +262,7 @@ def _attach_note(
     plain (headless) dotted line. Never drops non-empty note text (see the
     module docstring's degradation notes on *why* the box floats wherever
     the graph places it rather than strictly left/right of ``target``)."""
-    stripped = text.strip()
+    stripped = decode_entities(text.strip())
     if not target or not stripped:
         return
     if target not in nodes:
@@ -394,7 +395,7 @@ def parse(source: str) -> FlowGraph:
         m = _ALIAS_RE.match(line)
         if m:
             title, node_id, opens_brace = m.groups()
-            display = title.strip() or node_id
+            display = decode_entities(title.strip()) or node_id
             if opens_brace:
                 sub = Subgraph(id=node_id, title=display)
                 composites[node_id] = sub

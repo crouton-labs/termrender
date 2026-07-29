@@ -59,6 +59,7 @@ import re
 from dataclasses import dataclass
 
 from termrender.renderers.mermaid_prelude import strip_prelude_lines
+from termrender.renderers.mermaid_text import decode_entities
 from termrender.style import visual_center, visual_len
 
 __all__ = ["render_sequence", "SequenceDiagramError"]
@@ -160,7 +161,7 @@ _BOX_PAD = 3
 
 
 def _flatten(text: str) -> str:
-    return _BR_RE.sub(" / ", text) if text else ""
+    return decode_entities(_BR_RE.sub(" / ", text)) if text else ""
 
 
 def _format_label(ev: Arrow) -> str:
@@ -216,7 +217,7 @@ def _parse(lines: list[str]) -> tuple[list[Participant], list[Event]]:
         m = _PARTICIPANT_RE.match(line)
         if m:
             pid, alias = m.group(1), m.group(2)
-            label = alias.strip() if alias else pid
+            label = decode_entities(alias.strip()) if alias else pid
             if pid in participants:
                 if alias:
                     participants[pid].label = label

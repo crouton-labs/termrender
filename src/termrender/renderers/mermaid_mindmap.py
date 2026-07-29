@@ -26,6 +26,7 @@ from __future__ import annotations
 import re
 
 from termrender.blocks import Block, BlockType
+from termrender.renderers.mermaid_text import decode_entities
 from termrender.renderers.tree import render as render_tree
 
 _HEADER_RE = re.compile(r"^\s*mindmap\b", re.IGNORECASE)
@@ -57,8 +58,8 @@ def _node_label(text: str) -> str:
     for pattern in _NODE_SHAPE_RES:
         m = pattern.match(text)
         if m:
-            return _BR_RE.sub(" / ", m.group(2).strip())
-    return _BR_RE.sub(" / ", text)
+            return decode_entities(_BR_RE.sub(" / ", m.group(2).strip()))
+    return decode_entities(_BR_RE.sub(" / ", text))
 
 
 def parse_mindmap(source: str) -> str:

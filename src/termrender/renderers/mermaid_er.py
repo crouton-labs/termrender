@@ -107,6 +107,7 @@ from termrender.renderers.mermaid_flow_model import (
     NodeShape,
 )
 from termrender.renderers.mermaid_prelude import strip_prelude_lines
+from termrender.renderers.mermaid_text import decode_entities
 
 __all__ = ["render_er", "ERDiagramError"]
 
@@ -196,7 +197,10 @@ def _parse_entity_token(token: str) -> tuple[str, str | None]:
     if not m:
         return _unquote(token.strip()), None
     alias = m.group("alias")
-    return _unquote(m.group("id")), (alias.strip() if alias else None)
+    return (
+        decode_entities(_unquote(m.group("id"))),
+        (decode_entities(alias.strip()) if alias else None),
+    )
 
 
 def _get_or_create(entities: dict[str, _Entity], token: str) -> _Entity:
@@ -211,7 +215,7 @@ def _get_or_create(entities: dict[str, _Entity], token: str) -> _Entity:
 
 
 def _format_attr_row(m: re.Match[str]) -> str:
-    row = f"{m.group('type')} {_unquote(m.group('name'))}"
+    row = decode_entities(f"{m.group('type')} {_unquote(m.group('name'))}")
     keys = m.group("keys")
     if keys:
         norm = re.sub(r"\s*,\s*", ", ", keys.strip()).upper()
@@ -257,7 +261,7 @@ def _try_relation(
     dst_card = _CARD_RIGHT.get(m.group("right"))
     label_text = rm.group("label")
     parts = [p for p in (src_card, label_text, dst_card) if p]
-    label = " ".join(parts) if parts else None
+    label = decode_entities(" ".join(parts)) if parts else None
 
     edges.append(
         FlowEdge(
