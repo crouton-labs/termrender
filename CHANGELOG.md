@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.12.4 (2026-07-29)
+
+### Bug Fixes
+
+- Decode HTML/mermaid entity codes in mermaid labels
+  ([`ed96a9a`](https://github.com/crouton-labs/termrender/commit/ed96a9ad8a0fc53a2ddffd001f9f9b86a1705218))
+
+
 ## v4.12.3 (2026-07-25)
 
 ### Bug Fixes
