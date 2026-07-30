@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.12.5 (2026-07-30)
+
+### Bug Fixes
+
+- **mermaid**: Treat literal \n as a line break in labels
+  ([`6608433`](https://github.com/crouton-labs/termrender/commit/660843363c720d44492a387aa6f9549b1c50093b))
+
+
 ## v4.12.4 (2026-07-29)
 
 ### Bug Fixes
