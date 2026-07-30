@@ -15,6 +15,12 @@ level rather than over the whole source is deliberate: ``--&gt;`` inside a
 quoted label must not become a real ``-->`` connector, and ``&amp;`` must
 not become flowchart's ``&`` node-group separator.
 
+This module also owns :data:`BREAK_RE`, the shared "author asked for a line
+break" pattern. Authors write that break two ways — the documented ``<br/>``
+and a literal backslash-``n`` (``A["live list\nroute match"]``), which mermaid
+renders as a break too — so both must be recognized wherever a renderer
+normalizes a label, or the escape shows up verbatim in the box.
+
 Decoding is strict, unlike :func:`html.unescape`: only a complete
 ``&name;`` / ``&#nnn;`` / ``&#xhh;`` (or the hash-form equivalent) is
 decoded. The stdlib's leniency about a missing semicolon would mangle
@@ -34,6 +40,11 @@ import re
 _CODE_RE = re.compile(
     r"(?:&#|#)(\d{1,7}|[xX][0-9a-fA-F]{1,6});|(?:&|#)([A-Za-z][A-Za-z0-9]{1,31});"
 )
+
+# An author-requested line break: ``<br>``/``<br/>``/``<BR />`` or a literal
+# backslash-n. Each renderer substitutes its own replacement — a real newline
+# where the surface can stack lines, a separator where it cannot.
+BREAK_RE = re.compile(r"<br\s*/?>|\\n", re.IGNORECASE)
 
 
 def _resolve(code: str) -> str | None:

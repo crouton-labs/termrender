@@ -246,6 +246,19 @@ def test_edge_label_br_flattens_to_space():
     assert _edges(g, "A", "B")[0].label == "connect (OAuth)"
 
 
+def test_literal_backslash_n_is_a_line_break():
+    # A literal backslash-n is the other way authors write a break; it must
+    # behave exactly like <br/> rather than showing up verbatim in the box.
+    g = parse(
+        "graph TD\n"
+        "A[Acquisition service\\nlive list]-->|matching executor\\n(no nav)|B\n"
+        "subgraph s1[Top\\nhalf]\nA\nend\n"
+    )
+    assert _node(g, "A").label == "Acquisition service\nlive list"
+    assert _edges(g, "A", "B")[0].label == "matching executor (no nav)"
+    assert g.subgraphs[0].title == "Top half"
+
+
 def test_subgraph_title_br_flattens_to_space():
     g = parse("graph TD\nsubgraph s1[Top<br/>half]\nA\nend\n")
     assert g.subgraphs[0].title == "Top half"

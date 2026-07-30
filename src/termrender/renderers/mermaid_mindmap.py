@@ -26,13 +26,13 @@ from __future__ import annotations
 import re
 
 from termrender.blocks import Block, BlockType
-from termrender.renderers.mermaid_text import decode_entities
+from termrender.renderers.mermaid_text import BREAK_RE, decode_entities
 from termrender.renderers.tree import render as render_tree
 
 _HEADER_RE = re.compile(r"^\s*mindmap\b", re.IGNORECASE)
 _ICON_RE = re.compile(r"^::icon\(", re.IGNORECASE)
 _CLASS_RE = re.compile(r"^:::")
-_BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_BR_RE = BREAK_RE
 
 # Node-shape wrappers, most-specific delimiter pair first so a greedy
 # shorter pattern doesn't bite off half of a longer one (mirrors the

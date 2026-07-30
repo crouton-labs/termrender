@@ -102,7 +102,7 @@ from termrender.renderers.mermaid_flow_model import (
     Subgraph,
 )
 from termrender.renderers.mermaid_prelude import strip_prelude_lines
-from termrender.renderers.mermaid_text import decode_entities
+from termrender.renderers.mermaid_text import BREAK_RE, decode_entities
 
 __all__ = ["render_state", "StateDiagramError"]
 
@@ -175,9 +175,12 @@ class _Scope:
 
 
 def _norm_label(text: str | None) -> str | None:
+    """Normalize a *transition* label: decode entity codes and flatten an
+    author's line break (``<br/>`` or ``\\n``) to a space — transition labels
+    render on a single line along the path."""
     if text is None:
         return None
-    stripped = decode_entities(text.strip())
+    stripped = decode_entities(BREAK_RE.sub(" ", text.strip()).strip())
     return stripped or None
 
 
@@ -395,13 +398,17 @@ def parse(source: str) -> FlowGraph:
         m = _ALIAS_RE.match(line)
         if m:
             title, node_id, opens_brace = m.groups()
-            display = decode_entities(title.strip()) or node_id
+            stripped = title.strip()
             if opens_brace:
+                # A composite's title renders on a single header line, so a
+                # break flattens to a space; a plain state box can stack lines.
+                display = decode_entities(BREAK_RE.sub(" ", stripped)) or node_id
                 sub = Subgraph(id=node_id, title=display)
                 composites[node_id] = sub
                 stack.append(sub)
                 scopes.append(_Scope(key=node_id))
             else:
+                display = decode_entities(BREAK_RE.sub("\n", stripped)) or node_id
                 _register(nodes, stack, node_id, label=display)
             continue
 

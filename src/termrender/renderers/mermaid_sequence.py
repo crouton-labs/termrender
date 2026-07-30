@@ -59,7 +59,7 @@ import re
 from dataclasses import dataclass
 
 from termrender.renderers.mermaid_prelude import strip_prelude_lines
-from termrender.renderers.mermaid_text import decode_entities
+from termrender.renderers.mermaid_text import BREAK_RE, decode_entities
 from termrender.style import visual_center, visual_len
 
 __all__ = ["render_sequence", "SequenceDiagramError"]
@@ -116,7 +116,7 @@ Event = Arrow | NoteEvent | BlockBoundary | PlainLabel
 # --------------------------------------------------------------------------
 
 _COMMENT_RE = re.compile(r"^%%")
-_BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_BR_RE = BREAK_RE
 _AUTONUMBER_RE = re.compile(r"^autonumber(?:\s+(\d+))?(?:\s+(\d+))?\s*$", re.IGNORECASE)
 _ACTIVATE_RE = re.compile(r"^(?:activate|deactivate)\s+\S+\s*$", re.IGNORECASE)
 _PARTICIPANT_RE = re.compile(
