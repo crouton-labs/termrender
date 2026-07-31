@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.12.6 (2026-07-31)
+
+### Bug Fixes
+
+- Render frontmatter as metadata
+  ([`2b00468`](https://github.com/crouton-labs/termrender/commit/2b0046842c50d813f136d559b528b6c752f40c81))
+
+
 ## v4.12.5 (2026-07-30)
 
 ### Bug Fixes
