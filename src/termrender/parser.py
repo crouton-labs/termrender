@@ -83,6 +83,24 @@ _OPTION_LINE_RE = re.compile(r"^:(\w[\w-]*):\s+(.+)$")
 
 _mistune_md = mistune.create_markdown(renderer="ast", plugins=["table"])
 
+_FRONTMATTER_DELIMITER_RE = re.compile(r"^---[ \t]*$")
+
+
+def _split_leading_frontmatter(source: str) -> tuple[str | None, str, int]:
+    """Split complete YAML frontmatter from the start of a document.
+
+    Returns ``(frontmatter, body, consumed_lines)``. An opening delimiter
+    without a matching closer remains ordinary Markdown so content is never
+    silently discarded.
+    """
+    lines = source.split("\n")
+    if not lines or not _FRONTMATTER_DELIMITER_RE.match(lines[0]):
+        return None, source, 0
+    for i in range(1, len(lines)):
+        if _FRONTMATTER_DELIMITER_RE.match(lines[i]):
+            return "\n".join(lines[1:i]), "\n".join(lines[i + 1:]), i + 1
+    return None, source, 0
+
 
 def _any_self_closing_before(lines: list[str], close_idx: int) -> bool:
     """Check if there's a self-closing directive on a preceding non-blank line."""
@@ -963,8 +981,29 @@ def parse(source: str, _depth: int = 0, _line_offset: int = 0) -> Block:
     """
     if _depth > _MAX_PARSE_DEPTH:
         raise ValueError(f"Maximum directive nesting depth ({_MAX_PARSE_DEPTH}) exceeded")
-    segments = _split_directives(source, _line_offset=_line_offset)
     children: list[Block] = []
+
+    # YAML frontmatter is document metadata, not CommonMark. If passed to
+    # Mistune directly, the delimiters become dividers, folded keys become a
+    # paragraph, and YAML sequences become Markdown lists. Preserve the raw
+    # lines in one dim metadata box instead.
+    if _depth == 0:
+        frontmatter, source, consumed_lines = _split_leading_frontmatter(source)
+        if frontmatter is not None:
+            children.append(Block(
+                type=BlockType.CODE,
+                attrs={
+                    "lang": "yaml",
+                    "title": "metadata",
+                    "source": frontmatter,
+                    "src_content_start": _line_offset + 2,
+                },
+                src_start=_line_offset + 1,
+                src_end=_line_offset + consumed_lines,
+            ))
+            _line_offset += consumed_lines
+
+    segments = _split_directives(source, _line_offset=_line_offset)
 
     for seg in segments:
         if seg["type"] == "markdown":

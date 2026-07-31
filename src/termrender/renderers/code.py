@@ -10,7 +10,34 @@ from pygments.lexers import TextLexer, get_lexer_by_name
 
 from termrender.blocks import Block, Span
 from termrender.renderers.borders import render_box
-from termrender.style import visual_len, wrap_text
+from termrender.style import grapheme_clusters, visual_len
+
+
+def wrap_source_line(line: str, width: int) -> list[str]:
+    """Hard-wrap one verbatim source line without folding its whitespace."""
+    if not line:
+        return [""]
+    if width <= 0:
+        return [line]
+
+    lines: list[str] = []
+    current = ""
+    current_width = 0
+    for cluster in grapheme_clusters(line):
+        cluster_width = visual_len(cluster)
+        if current and current_width + cluster_width > width:
+            lines.append(current)
+            current = ""
+            current_width = 0
+        current += cluster
+        current_width += cluster_width
+        if current_width >= width:
+            lines.append(current)
+            current = ""
+            current_width = 0
+    if current:
+        lines.append(current)
+    return lines or [""]
 
 
 def render(
@@ -31,6 +58,7 @@ def render_with_spans(
     whole-block span when the parser did not record the first content line."""
     source = block.attrs.get("source", "")
     lang = block.attrs.get("lang")
+    title = block.attrs.get("title", lang)
     whole: Span = (
         (block.src_start, block.src_end)
         if block.src_start is not None and block.src_end is not None
@@ -46,7 +74,7 @@ def render_with_spans(
     wrapped_lines = []
     line_spans: list[Span] = []
     for r, line in enumerate(raw_lines):
-        segs = wrap_text(line, content_w)
+        segs = wrap_source_line(line, content_w)
         wrapped_lines.extend(segs)
         if content_start is not None:
             src_line = content_start + r
@@ -75,7 +103,7 @@ def render_with_spans(
         code_lines,
         width=block.width,
         color=color,
-        title=lang,
+        title=title,
         dim=True,
     )
     # Box shape: top border + content rows (one empty row when content is

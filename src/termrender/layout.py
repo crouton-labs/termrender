@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from termrender.blocks import Block, BlockType
 from termrender.renderers.arrow_chain import render_arrow_chain
+from termrender.renderers.code import wrap_source_line
 from termrender.renderers.mermaid import render_mermaid_lines
 from termrender.style import wrap_text, visual_len
 
@@ -94,7 +95,7 @@ def resolve_height(block: Block) -> None:
         raw_lines = source.split("\n") if source else [""]
         border_v = visual_len("│")
         content_w = max(width - 2 * border_v - 2, 1)
-        total_lines = sum(len(wrap_text(line, content_w)) for line in raw_lines)
+        total_lines = sum(len(wrap_source_line(line, content_w)) for line in raw_lines)
         block.height = total_lines + 2
 
     elif bt == BlockType.COLUMNS:
