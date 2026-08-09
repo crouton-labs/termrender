@@ -1,6 +1,53 @@
 # CHANGELOG
 
 
+## v4.12.7 (2026-08-09)
+
+### Bug Fixes
+
+- **mermaid**: Expose flowchart parse diagnostics
+  ([`dd0ec4b`](https://github.com/crouton-labs/termrender/commit/dd0ec4b83fd9958f7238e0103a348358ac374f92))
+
+- **mermaid**: Frames join crossing edges, lanes clear frames, diamond tips anchor arrowheads
+  ([`15b33a2`](https://github.com/crouton-labs/termrender/commit/15b33a219b49fa0321c150585a1537d847f96677))
+
+Three flowchart rendering defects, all in the layout engine's own geometry.
+
+Subgraph frame borders now write through the same line bitmask the router draws edges with (no
+  EdgeStyle of their own), so a cross-boundary edge crossing a frame resolves into a ┼/┬/├ junction
+  instead of overwriting that stretch of border with a bare ─ or │. A frame is more lines on the one
+  line plane, not a plane the router cannot see. Node boxes deliberately stay on set_char + reserve
+  — an arrowhead is meant to land on a box border. The frame title's own cells drop their border
+  bits, since the title genuinely interrupts the top run.
+
+Back-edge lanes now measure past subgraph frames as well as node rects. A frame extends past its
+  members by its own padding, so a lane parked at max(node far edge) + _LANE_MARGIN landed on the
+  frame's border row/column.
+
+Forward entry/exit anchors are shape-aware for the one shape whose outline does not reach the
+  bounding-rect border cell: a diamond's tip in TB/BT, where the outermost taper row is two slant
+  glyphs around a blank, reserved cell. The arrowhead used to float inside that notch (╱ ▼ ╲) with
+  the line into it skipped as reserved; it now sits one cell out in the inter-rank gap (always
+  clear, _ROW_GAP reserves two rows), pointing at the tip. A diamond whose slants do meet at the tip
+  row, a diamond too small to taper, LR/RL diamonds, hexagons and parallelograms are all left
+  exactly where they were — their tip cell is a real drawn border.
+
+The drawing-time taper calculation, previously copied by hand into _draw_diamond and
+  _diamond_straight_span and kept in sync by comment, is now one shared _drawn_diamond_taper the new
+  anchor helper reads too.
+
+Regression tests pin all three (each fails against the previous engine) plus a guard that
+  hexagon/parallelogram arrowheads stay on their drawn borders.
+
+- **mermaid**: Preserve sequence lifelines at messages
+  ([`d46ddf7`](https://github.com/crouton-labs/termrender/commit/d46ddf7220170eae7011fffaac216afb0889405e))
+
+### Documentation
+
+- **memory**: Correct renderer release handoff
+  ([`193e2f0`](https://github.com/crouton-labs/termrender/commit/193e2f0f80916d870c364a56d8d06551fa509ced))
+
+
 ## v4.12.6 (2026-07-31)
 
 ### Bug Fixes
