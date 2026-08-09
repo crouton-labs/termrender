@@ -26,9 +26,16 @@ __all__ = ["GLYPH_RANGE_RE", "raw_echo"]
 GLYPH_RANGE_RE = re.compile("[\u2500-\u259f\u25a0-\u25ff]")
 
 
-def raw_echo(source: str) -> list[str]:
+def raw_echo(source: str, diagnostic: str | None = None) -> list[str]:
     """Echo ``source``'s lines verbatim, minus trailing whitespace, with
     every box-drawing/geometric glyph (:data:`GLYPH_RANGE_RE`) replaced by
-    ``?`` so the echo can never be mistaken for a successful native
-    render."""
-    return [GLYPH_RANGE_RE.sub("?", line.rstrip()) for line in source.splitlines()]
+    ``?`` so the echo can never be mistaken for a successful native render.
+
+    ``diagnostic`` optionally prepends one ASCII-only error line; the source
+    echo remains intact after it. ``ascii`` makes a parser message containing
+    authored non-ASCII text or glyphs safe for the same failure signal.
+    """
+    lines = [GLYPH_RANGE_RE.sub("?", line.rstrip()) for line in source.splitlines()]
+    if diagnostic is not None:
+        lines.insert(0, f"mermaid error: {ascii(diagnostic)[1:-1]}")
+    return lines

@@ -12,6 +12,7 @@ import re
 
 import pytest
 
+from termrender.renderers.mermaid_degradation import raw_echo
 from termrender.renderers.mermaid_flow import render_flowchart
 
 _BOX_GLYPH_RE = re.compile(r"[\u2500-\u259F\u25A0-\u25FF]")
@@ -260,12 +261,17 @@ def test_headless_edge_has_no_arrowhead():
 # --------------------------------------------------------------------------
 
 
-def test_malformed_input_raw_echoes_with_no_box_glyphs():
-    source = "not a diagram\njust some text\n"
+def test_malformed_flowchart_preserves_source_and_surfaces_ascii_diagnostic():
+    source = "graph TD\nA[Start --> B\n"
     lines = render_flowchart(source, width=80)
-    assert lines == ["not a diagram", "just some text"]
-    text = "\n".join(lines)
-    assert not _BOX_GLYPH_RE.search(text), "raw echo must contain no box-drawing glyphs"
+    assert lines == [
+        "mermaid error: unrecognized flowchart statement: 'A[Start --> B'",
+        "graph TD",
+        "A[Start --> B",
+    ]
+    assert lines[1:] == raw_echo(source)
+    assert lines[0].isascii()
+    assert not _BOX_GLYPH_RE.search("\n".join(lines))
 
 
 def test_empty_body_headed_diagram_raw_echoes():
@@ -276,20 +282,24 @@ def test_empty_body_headed_diagram_raw_echoes():
     assert not _BOX_GLYPH_RE.search(text)
 
 
-def test_unrecognized_body_line_forces_raw_echo():
+def test_unrecognized_body_line_preserves_source_and_sanitizes_diagnostic():
     source = "graph TD\nA-->B\nthis is not mermaid ┌"
     lines = render_flowchart(source, width=80)
-    assert lines == ["graph TD", "A-->B", "this is not mermaid ?"]
-    text = "\n".join(lines)
-    assert not _BOX_GLYPH_RE.search(text)
+    assert lines[0] == (
+        "mermaid error: unrecognized flowchart statement: "
+        "'this is not mermaid \\u250c'"
+    )
+    assert lines[1:] == raw_echo(source)
+    assert lines[0].isascii()
+    assert not _BOX_GLYPH_RE.search("\n".join(lines))
 
 
-def test_unterminated_subgraph_forces_raw_echo():
+def test_unterminated_subgraph_preserves_source_and_surfaces_diagnostic():
     source = "graph TD\nsubgraph S\nA-->B"
     lines = render_flowchart(source, width=80)
-    assert lines == ["graph TD", "subgraph S", "A-->B"]
-    text = "\n".join(lines)
-    assert not _BOX_GLYPH_RE.search(text)
+    assert lines[0] == "mermaid error: unterminated subgraph"
+    assert lines[1:] == raw_echo(source)
+    assert not _BOX_GLYPH_RE.search("\n".join(lines))
 
 
 @pytest.mark.parametrize(
@@ -305,11 +315,14 @@ def test_unterminated_subgraph_forces_raw_echo():
         "graph TD\nA-->B\naccDescr\n",
     ],
 )
-def test_malformed_presentational_directive_forces_raw_echo(source):
+def test_malformed_presentational_directive_preserves_source_and_surfaces_diagnostic(
+    source,
+):
     lines = render_flowchart(source, width=80)
-    assert lines == [line.rstrip() for line in source.splitlines()]
-    text = "\n".join(lines)
-    assert not _BOX_GLYPH_RE.search(text)
+    assert lines[0].startswith("mermaid error: unrecognized flowchart statement: ")
+    assert lines[0].isascii()
+    assert lines[1:] == raw_echo(source)
+    assert not _BOX_GLYPH_RE.search("\n".join(lines))
 
 
 def test_presentational_directives_with_acc_title_and_descr_still_render_natively():
@@ -341,25 +354,32 @@ def test_degraded_echo_sanitizes_box_glyphs_present_in_raw_source():
     lines = render_flowchart(source, width=80)
     text = "\n".join(lines)
     assert not _BOX_GLYPH_RE.search(text)
-    assert lines[0] == "not a diagram"
-    assert "\u250c" not in lines[1]
+    assert lines[0] == (
+        "mermaid error: not a mermaid flowchart: source must start with "
+        "'graph' or 'flowchart'"
+    )
+    assert lines[1:] == raw_echo(source)
+    assert "\u250c" not in lines[2]
 
 
 def test_render_flowchart_never_raises_and_degrades_cleanly_on_garbage_input():
     # Defensive: assorted odd inputs must never raise. A bare
     # "isinstance(lines, list)" would also accept a renderer that returned
     # `[]`, a raw echo, or a bogus boxed diagram for every case — assert
-    # the actual degradation semantics instead: whichever inputs don't
-    # render real box glyphs must be an *exact* rstripped echo of the
-    # source (the load-bearing contract), not merely "some list".
+    # the actual degradation semantics instead: parser failures prepend an
+    # ASCII diagnostic while preserving the exact rstripped source echo;
+    # source-only fallbacks remain exact echoes.
     for source in ("", "\n\n\n", "graph", "flowchart LR\n", "graph TD\nA-->\n"):
         lines = render_flowchart(source, width=80)
         assert isinstance(lines, list)
         text = "\n".join(lines)
         if not _BOX_GLYPH_RE.search(text):
-            assert lines == [line.rstrip() for line in source.splitlines()], (
-                f"degraded output for {source!r} must be an exact raw echo, got {lines!r}"
-            )
+            if source in ("graph", "flowchart LR\n"):
+                assert lines == raw_echo(source)
+            else:
+                assert lines[0].startswith("mermaid error: ")
+                assert lines[0].isascii()
+                assert lines[1:] == raw_echo(source)
 
 
 # --------------------------------------------------------------------------

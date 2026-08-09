@@ -75,11 +75,12 @@ def render_flowchart(source: str, width: int) -> list[str]:
        header on its first non-blank, post-prelude line), or the body
        contains any unrecognized statement, dangling connector (an edge
        with a missing endpoint), or unterminated ``subgraph`` block —
-       :func:`parse` raises :class:`FlowchartError` for all of these; only
-       known-presentational lines (``%%`` comments/directives,
-       ``classDef``/``class``/``style``/``click``/``linkStyle``/
-       ``accTitle``/``accDescr``) are silently skipped rather than forcing
-       this path.
+       :func:`parse` raises :class:`FlowchartError` for all of these. Its
+       message is prepended as one ASCII-only ``mermaid error:`` line; the
+       sanitized raw source follows unchanged. Only known-presentational
+       lines (``%%`` comments/directives, ``classDef``/``class``/``style``/
+       ``click``/``linkStyle``/``accTitle``/``accDescr``) are silently
+       skipped rather than forcing this path.
     2. Parsing succeeds but yields zero nodes (an empty or comment-only
        diagram body) — nothing to draw.
     3. Any unexpected exception escapes :func:`layout_flowgraph` — a
@@ -102,12 +103,13 @@ def render_flowchart(source: str, width: int) -> list[str]:
 
     Returns:
         Rendered lines on success, or a raw-echo of ``source`` on any of
-        the three degradation conditions above.
+        the three degradation conditions above. Parse failures prepend their
+        ASCII-only diagnostic; all other degradation paths are source-only.
     """
     try:
         graph = parse(source)
-    except FlowchartError:
-        return raw_echo(source)
+    except FlowchartError as exc:
+        return raw_echo(source, str(exc))
 
     if not graph.nodes:
         return raw_echo(source)

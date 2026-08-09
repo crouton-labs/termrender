@@ -2,6 +2,7 @@ import unittest
 from unittest import mock
 
 from termrender.renderers import mermaid
+from termrender.renderers.mermaid_degradation import raw_echo
 
 
 class TestMermaidDispatch(unittest.TestCase):
@@ -119,6 +120,18 @@ class TestMermaidDispatch(unittest.TestCase):
         src = "sankey-beta\n\nA,B,10\nB,C,5"
         lines = mermaid.render_mermaid_lines(src, 40)
         self.assertEqual(lines, src.splitlines())
+
+    def test_unsupported_families_remain_source_only_raw_echoes(self):
+        for src in (
+            "sankey-beta\nA,B,10",
+            "C4Context\n    Person(a, \"A\")",
+            "block-beta\n    columns 1\n    a",
+            "packet-beta\n    0-15: \"data\"",
+            "kanban\n    Todo\n    Task1",
+        ):
+            lines = mermaid.render_mermaid_lines(src, 40)
+            self.assertEqual(lines, raw_echo(src))
+            self.assertFalse(lines[0].startswith("mermaid error: "))
 
     def test_exotic_type_raw_echo_contains_no_box_glyphs(self):
         # Pinning the degradation contract: the crouter viewer keys on the

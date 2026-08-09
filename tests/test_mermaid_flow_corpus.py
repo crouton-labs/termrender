@@ -521,9 +521,14 @@ def test_wide_glyph_labels_fit_width_and_stay_inside_their_boxes():
 # --------------------------------------------------------------------------
 
 
-def test_malformed_input_echoes_with_no_box_glyphs():
+def test_malformed_input_preserves_source_with_no_box_glyphs():
     lines = _lines("not a diagram\njust some text\n")
-    assert lines == ["not a diagram", "just some text"]
+    assert lines == [
+        "mermaid error: not a mermaid flowchart: source must start with "
+        "'graph' or 'flowchart'",
+        "not a diagram",
+        "just some text",
+    ]
     assert not _BOX_GLYPH_RE.search("\n".join(lines))
 
 
