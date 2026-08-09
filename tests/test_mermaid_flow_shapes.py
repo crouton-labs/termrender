@@ -326,3 +326,93 @@ def test_router_avoids_diamond_interior():
     assert not (set(span) & line_glyphs), (
         f"an edge line must not cross through the diamond's interior: {span!r}"
     )
+
+
+# --------------------------------------------------------------------------
+# Frames and lanes are separate planes from the edges that cross them
+# --------------------------------------------------------------------------
+
+_JUNCTION_GLYPHS = set("\u250c\u2510\u2514\u2518\u251c\u2524\u252c\u2534\u253c")
+_VERTICAL_FRAME_GLYPHS = _JUNCTION_GLYPHS | {"\u2502"}
+
+
+def test_crossing_edge_joins_a_subgraph_frame_border_instead_of_erasing_it():
+    # An edge from a non-member into a framed member crosses the frame's
+    # left border. Before frame borders seeded the line bitmask, the
+    # crossing wrote a bare ─ over that column and the frame visibly lost
+    # a side.
+    source = "flowchart LR\nAPI[API] --> Worker\nsubgraph Edge\nWorker[Worker]\nend\n"
+    lines = render_flowchart(source, width=70)
+    top = _row_of(lines, "Edge")
+    left_col = lines[top].index("\u250c")
+    bottom = max(i for i, line in enumerate(lines) if len(line) > left_col
+                 and line[left_col] == "\u2514")
+    arrow_row = _row_of(lines, "\u25b6")
+    assert top < arrow_row < bottom, "the arrow must cross the frame's side, not miss it"
+    for row in range(top, bottom + 1):
+        glyph = lines[row][left_col]
+        assert glyph in _VERTICAL_FRAME_GLYPHS, (
+            f"frame's left border broken at row {row} (got {glyph!r}): {lines!r}"
+        )
+    assert lines[arrow_row][left_col] in _JUNCTION_GLYPHS, (
+        f"the crossing must resolve to a junction: {lines[arrow_row]!r}"
+    )
+
+
+def test_back_edge_lane_clears_the_subgraph_frame_it_passes():
+    # The lane is parked past every drawn object's far edge. A frame
+    # extends past its members by its own padding, so a lane measured off
+    # node boxes alone landed on the frame's own border column.
+    source = (
+        "flowchart TD\nA[Start] --> B[Work]\n"
+        "subgraph Loop\nB --> C[Check]\nend\nC -->|callback| A\n"
+    )
+    lines = render_flowchart(source, width=70)
+    frame_top = _row_of(lines, "Loop")
+    frame_right = lines[frame_top].index("\u2510")
+    label_col = _col_of(lines, "callback")
+    assert label_col > frame_right, (
+        f"back-edge lane label at column {label_col} must sit past the frame's "
+        f"right border at column {frame_right}: {lines!r}"
+    )
+    frame_bottom = max(i for i, line in enumerate(lines) if line.startswith("\u2514"))
+    assert lines[frame_bottom].rstrip() == "\u2514" + "\u2500" * (frame_right - 1) + "\u2518", (
+        f"nothing may share the frame's bottom border row: {lines[frame_bottom]!r}"
+    )
+
+
+# --------------------------------------------------------------------------
+# Forward arrowheads meet the outline they point at
+# --------------------------------------------------------------------------
+
+
+def test_diamond_arrowhead_lands_clear_of_the_blank_apex():
+    lines = render_flowchart("flowchart TD\nA[Start] --> B{Ok?}\nB --> C[Done]\n", width=70)
+    label_row = _row_of(lines, "Ok?")
+    arrow_row = _row_of(lines, "\u25bc")
+    taper_rows = [
+        i for i, line in enumerate(lines) if _SLANT & set(line) and i < label_row
+    ]
+    assert taper_rows, f"expected a tapered diamond: {lines!r}"
+    assert arrow_row < min(taper_rows), (
+        f"the entry arrowhead must sit above the diamond's taper, not inside "
+        f"its blank apex: {lines!r}"
+    )
+    assert lines[arrow_row].index("\u25bc") == lines[min(taper_rows)].index("\u2571") + (
+        lines[min(taper_rows)].index("\u2572") - lines[min(taper_rows)].index("\u2571")
+    ) // 2, f"the arrowhead must stay centered on the tip it points at: {lines!r}"
+
+
+def test_tapered_shapes_with_a_real_top_border_keep_the_arrowhead_on_it():
+    # A hexagon's and a parallelogram's outermost rows are drawn border
+    # *runs*, not a blank apex — their arrowheads already land on the
+    # outline and must not be nudged into the inter-rank gap.
+    lines = render_flowchart(
+        "flowchart TD\nA[Start] --> H{{Hexy}}\nH --> P[/Slanted/]\n", width=70
+    )
+    for label in ("Hexy", "Slanted"):
+        border_row = lines[_row_of(lines, label) - 1]
+        assert "\u25bc" in border_row, (
+            f"{label}'s arrowhead must stay on its drawn top border: {border_row!r}"
+        )
+        assert _SLANT & set(border_row)

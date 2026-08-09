@@ -69,7 +69,11 @@ nesting handled by :func:`_build_subgraph_frames`) when their members are
 placed contiguously enough for a clean rect; otherwise the subgraph flattens
 (no frame, members still drawn) rather than draw a frame that visually
 claims a non-member node. Frames are drawn first (behind), then node boxes,
-then edges.
+then edges. A frame's border runs are written through the same line bitmask
+edges use, so a cross-boundary edge crossing one composes into a junction
+glyph instead of erasing that stretch of border; frames also count as drawn
+objects when a back-edge lane picks its column (:func:`_lane_secondary_base`),
+so a lane never lands on a frame's own border.
 
 Edges get the full orthogonal router. Per edge, endpoint anchors are chosen
 by the two boxes' *relative rank position* (their spans along the rank axis
@@ -77,7 +81,9 @@ either overlap — same rank — or one is strictly ahead of the other, a test
 that holds regardless of direction because rank bands are always separated
 by a clear gap): a forward edge exits/enters the border facing the rank-flow
 direction (``bottom_mid``/``top_mid`` for TB, mirrored/transposed for
-BT/LR/RL); a same-rank edge uses the two boxes' facing side mids; a back-edge
+BT/LR/RL), stepping one cell out into the inter-rank gap for the one shape
+whose outline does not actually reach that cell — a diamond's tip in TB/BT,
+see :func:`_forward_tip_anchor`; a same-rank edge uses the two boxes' facing side mids; a back-edge
 (destination at an earlier rank — the cycle case) exits/enters the side
 perpendicular to the rank axis and routes through a growing side lane so
 stacked back-edges never collide (the right side for TB/BT, the bottom side
@@ -680,12 +686,7 @@ class Canvas:
         if w < 5 or h < 3:
             self._draw_rect(rect, label)
             return
-        max_taper = max(1, (w - 1) // 2)
-        content_lines = _wrap_label(label, max(w - 4, 1)) or [""]
-        taper = max(1, (h - len(content_lines)) // 2)
-        taper = min(taper, max_taper, (h - 1) // 2 or 1)
-        if h - 2 * taper < 1:
-            taper = max(1, (h - 1) // 2)
+        taper = _drawn_diamond_taper(w, h, label)
         self._reserve_blank(rect)
         right, bottom = x + w - 1, y + h - 1
         rows: list[tuple[int, int, int]] = []
@@ -720,34 +721,68 @@ class Canvas:
         Frame cells are NOT reserved — nodes and edges live inside a
         subgraph frame and may legitimately cross its border lines (a
         cross-boundary edge routing from a member to a non-member, or vice
-        versa, draws right over the top/bottom/side border runs, which
-        reads fine as an ordinary crossing). The title *text* is the one
-        exception: it is reserved so a crossing edge's line segment is
-        skipped there rather than clobbering a letter of the label — the
-        router already treats a skipped reserved cell as an acceptable
-        small gap in the line (the same tolerance it gives box interiors),
-        which is far less visually broken than corrupted title text.
+        versa, draws right over the top/bottom/side border runs). Those
+        borders are written through the very same line bitmask the router
+        draws edges with (:meth:`_write_line_cell`, with no
+        :class:`EdgeStyle` of their own), so a crossing edge *joins* the
+        border into a ``┼``/``┬``/``├`` junction instead of replacing it
+        with a bare ``─``/``│``: a frame is more lines on the one line
+        plane, not a plane the router cannot see. Node boxes deliberately
+        stay on :meth:`set_char` + reserve — an arrowhead is *meant* to
+        land on a box border (:meth:`draw_glyph`), which is a different
+        contract from crossing one.
+
+        The title *text* is the one exception: it is reserved so a
+        crossing edge's line segment is skipped there rather than
+        clobbering a letter of the label — the router already treats a
+        skipped reserved cell as an acceptable small gap in the line (the
+        same tolerance it gives box interiors), which is far less visually
+        broken than corrupted title text. The title's own cells (and the
+        blank either side of it) also drop their border bits, since the
+        title genuinely interrupts the top run: an edge crossing there
+        draws its own plain line rather than resurrecting the border as a
+        junction.
         """
         x, y, w, h = rect.x, rect.y, rect.w, rect.h
         if w < 2 or h < 2:
             return
-        right = x + w - 1
-        self.set_char(x, y, "\u250c")
-        self.set_char(right, y, "\u2510")
-        self.set_char(x, y + h - 1, "\u2514")
-        self.set_char(right, y + h - 1, "\u2518")
+        right, bottom = x + w - 1, y + h - 1
+        self._write_line_cell(x, y, _DOWN | _RIGHT, None)
+        self._write_line_cell(right, y, _DOWN | _LEFT, None)
+        self._write_line_cell(x, bottom, _UP | _RIGHT, None)
+        self._write_line_cell(right, bottom, _UP | _LEFT, None)
         for cx in range(x + 1, right):
-            self.set_char(cx, y, "\u2500")
-            self.set_char(cx, y + h - 1, "\u2500")
-        for cy in range(y + 1, y + h - 1):
-            self.set_char(x, cy, "\u2502")
-            self.set_char(right, cy, "\u2502")
+            self._write_line_cell(cx, y, _LEFT | _RIGHT, None)
+            self._write_line_cell(cx, bottom, _LEFT | _RIGHT, None)
+        for cy in range(y + 1, bottom):
+            self._write_line_cell(x, cy, _UP | _DOWN, None)
+            self._write_line_cell(right, cy, _UP | _DOWN, None)
         if title:
+            for cx in range(x + 2, min(x + 4 + visual_len(title), right)):
+                self._clear_line_cell(cx, y)
             self.set_char(x + 2, y, " ")
             _write_label_run(self, x + 3, y, title, check_reserved=False)
             self.set_char(x + 3 + visual_len(title), y, " ")
 
-    def _write_line_cell(self, x: int, y: int, bits: int, style: EdgeStyle) -> None:
+    def _clear_line_cell(self, x: int, y: int) -> None:
+        """Forget any line-bitmask state at ``(x, y)`` without touching the
+        character there — used where a drawn glyph deliberately breaks a
+        run (a frame's title interrupting its own top border) so a later
+        crossing edge draws its own plain line instead of re-deriving a
+        junction from a border that visibly stops at that cell."""
+        self._bits.pop((x, y), None)
+        self._style.pop((x, y), None)
+
+    def _write_line_cell(
+        self, x: int, y: int, bits: int, style: EdgeStyle | None
+    ) -> None:
+        """Add ``bits`` to the line mask at ``(x, y)`` and rewrite that
+        cell's glyph from the combined mask. ``style`` is the
+        :class:`EdgeStyle` claiming the cell, or ``None`` for a line that
+        has no style of its own (a subgraph frame border, see
+        :meth:`draw_frame`) — a styleless cell resolves through
+        :data:`_JUNCTIONS` and, being unequal to any real style, always
+        yields the plain junction glyph when an edge later crosses it."""
         if self.is_reserved(x, y):
             return
         self.ensure(x, y)
@@ -932,8 +967,30 @@ def _diamond_taper(content_w: int) -> int:
     """Rows of corner-taper on each side of a diamond's flat label band —
     a small fixed range (not scaled to full 45° geometry, which would make
     short labels absurdly tall) so the point is visible without ballooning
-    box height for the common short decision-label case."""
+    box height for the common short decision-label case. Sizing-time only:
+    what the drawer ends up with at the *placed* size is
+    :func:`_drawn_diamond_taper`."""
     return _DIAMOND_MIN_TAPER if content_w <= 3 else _DIAMOND_MAX_TAPER
+
+
+def _drawn_diamond_taper(w: int, h: int, label: str) -> int:
+    """Rows of slanted taper :meth:`Canvas._draw_diamond` actually draws
+    above and below the flat label band of a diamond placed at ``(w, h)``.
+
+    The one source of truth for that geometry, shared by the drawer and by
+    every anchor helper that must not touch a tapered row
+    (:func:`_diamond_straight_span`, :func:`_forward_tip_anchor`) — those
+    reads used to each carry their own copy of this calculation, kept in
+    sync by hand. Callers must first rule out the too-small fallback
+    (``w < 5 or h < 3``), where the drawer emits a plain rect with no
+    taper at all."""
+    max_taper = max(1, (w - 1) // 2)
+    content_lines = _wrap_label(label or "", max(w - 4, 1)) or [""]
+    taper = max(1, (h - len(content_lines)) // 2)
+    taper = min(taper, max_taper, (h - 1) // 2 or 1)
+    if h - 2 * taper < 1:
+        taper = max(1, (h - 1) // 2)
+    return taper
 
 
 def _compartment_box_dims(compartments: list[list[str]]) -> tuple[int, int]:
@@ -1539,6 +1596,50 @@ def _forward_entry(direction: Direction, rect: BoxRect) -> tuple[int, int]:
     return rect.top_mid if forward else rect.bottom_mid
 
 
+def _forward_tip_anchor(
+    direction: Direction,
+    node: "FlowNode | None",
+    rect: BoxRect,
+    point: tuple[int, int],
+) -> tuple[int, int]:
+    """A forward exit/entry anchor moved one cell clear of the box when
+    the shape's outline does not actually reach that border cell.
+
+    Exactly one shape has such a cell: a ``NodeShape.DIAMOND``'s top/bottom
+    tip in a TB/BT diagram. :meth:`Canvas._draw_diamond` draws the
+    outermost taper rows as two slant glyphs with *blank* (and reserved)
+    cells between them, so the bounding-rect ``top_mid``/``bottom_mid``
+    that :func:`_forward_entry`/:func:`_forward_exit` hand back — a real
+    border cell for every other shape — is for a diamond a hole outside
+    the outline. An arrowhead placed there floats in the taper's notch
+    (``╱ ▼ ╲``) and the line into it is skipped as reserved. Anchoring one
+    cell out into the inter-rank gap (always clear: ``_ROW_GAP`` reserves
+    two rows) puts the head immediately above/below the tip, pointing at
+    it, which is what a diamond tip reads as.
+
+    Everything else is left exactly where it was: a diamond whose slants
+    genuinely meet at the tip row (``2 * taper == w - 1``) has a glyph at
+    the mid column and is a real border; a diamond too small for any taper
+    is drawn as a plain rect; LR/RL diamonds anchor on their flat band
+    already (see :func:`_diamond_straight_span`); and a hexagon's or
+    parallelogram's tip row is a drawn border run, so an arrowhead lands
+    on it correctly today.
+    """
+    if node is None or node.compartments is not None:
+        return point
+    if node.shape is not NodeShape.DIAMOND or _rank_is_horizontal(direction):
+        return point
+    if rect.w < 5 or rect.h < 3:
+        return point
+    if 2 * _drawn_diamond_taper(rect.w, rect.h, node.label) == rect.w - 1:
+        return point
+    if point[1] == rect.y:
+        return (point[0], rect.y - 1)
+    if point[1] == rect.y + rect.h - 1:
+        return (point[0], rect.y + rect.h)
+    return point
+
+
 def _lane_anchor(direction: Direction, rect: BoxRect) -> tuple[int, int]:
     """``rect``'s border anchor on the side used for back-edge side lanes
     and self-loops: the side perpendicular to the rank axis and away from
@@ -1597,25 +1698,19 @@ def _lane_side(direction: Direction) -> str:
 
 def _diamond_straight_span(rect: BoxRect, label: str) -> tuple[int, int]:
     """A ``NodeShape.DIAMOND``'s left/right sides are only straight (``│``)
-    across its flat label band, between the two tapered corners — mirrors
-    :meth:`Canvas._draw_diamond`'s own taper calculation exactly (kept in
-    sync deliberately: this is the sizing-time read of that drawing-time
-    geometry) so a spread anchor never lands in the taper region, where
+    across its flat label band, between the two tapered corners — read off
+    the drawer's own taper (:func:`_drawn_diamond_taper`), so a spread
+    anchor never lands in the taper region, where
     the ``│`` a plain rect would have is instead a blank cell just outside
     the diamond's slanted outline (or the slant glyph itself) — either way
     a line touching down there reads as visually detached from the shape.
     Collapses to a single point (``lo == hi``) for a diamond too small to
     have more than one straight row, exactly reproducing the un-spread
     single-anchor point in that case."""
-    x, y, w, h = rect.x, rect.y, rect.w, rect.h
+    y, w, h = rect.y, rect.w, rect.h
     if w < 5 or h < 3:
         return y + h // 2, y + h // 2
-    max_taper = max(1, (w - 1) // 2)
-    content_lines = _wrap_label(label or "", max(w - 4, 1)) or [""]
-    taper = max(1, (h - len(content_lines)) // 2)
-    taper = min(taper, max_taper, (h - 1) // 2 or 1)
-    if h - 2 * taper < 1:
-        taper = max(1, (h - 1) // 2)
+    taper = _drawn_diamond_taper(w, h, label)
     lo, hi = y + taper, y + h - taper - 1
     if lo > hi:
         lo = hi = y + h // 2
@@ -2017,11 +2112,22 @@ def _lane_offsets(
     return offsets
 
 
-def _lane_secondary_base(direction: Direction, rects: dict[str, BoxRect]) -> int:
+def _lane_secondary_base(
+    direction: Direction,
+    rects: dict[str, BoxRect],
+    frames: list[BoxRect] | None = None,
+) -> int:
     """Starting side-lane coordinate just past *every* placed node's far
-    edge on the off-axis — the base that :func:`_route_edge_path` adds
-    ``_LANE_MARGIN + lane_offset`` (see :func:`_lane_offsets`) to, per
-    back-edge, to avoid stacking lanes.
+    edge — and every subgraph frame's — on the off-axis: the base that
+    :func:`_route_edge_path` adds ``_LANE_MARGIN + lane_offset`` (see
+    :func:`_lane_offsets`) to, per back-edge, to avoid stacking lanes.
+
+    ``frames`` (the enclosures :func:`_collect_frames` placed around
+    subgraph members) count as drawn objects here exactly like node
+    rects do. A frame extends past its members by its own padding, so a
+    lane measured off node boxes alone lands *on* a frame's border run
+    — the lane and the frame are different planes and must not share a
+    column/row.
 
     Scoped to the whole graph's rects, not just the one back-edge's own
     ``src``/``dst`` boxes: a back-edge's C-path runs its exit/entry legs
@@ -2037,11 +2143,12 @@ def _lane_secondary_base(direction: Direction, rects: dict[str, BoxRect]) -> int
     across the *whole* diagram, not per edge pair), reaching past the
     whole diagram's own far edge here is the same scope the stacking
     mechanism already assumes, not a new one."""
-    if not rects:
+    drawn = list(rects.values()) + list(frames or [])
+    if not drawn:
         return 0
     if _rank_is_horizontal(direction):
-        return max(r.y + r.h - 1 for r in rects.values())
-    return max(r.x + r.w - 1 for r in rects.values())
+        return max(r.y + r.h - 1 for r in drawn)
+    return max(r.x + r.w - 1 for r in drawn)
 
 
 def _segment_length(a: tuple[int, int], b: tuple[int, int]) -> int:
@@ -2626,6 +2733,8 @@ def _route_edge_path(
     entry_anchor: tuple[int, int] | None = None,
     mid_p: int | None = None,
     lane_offset: int = 0,
+    node_by_id: dict[str, FlowNode] | None = None,
+    frames: list[BoxRect] | None = None,
 ) -> list[tuple[int, int]] | None:
     """Compute one edge's polyline points: anchors chosen by relative rank
     position, an L/Z/C path shape. Pure path computation only — drawing is
@@ -2651,6 +2760,12 @@ def _route_edge_path(
     apart by label width rather than a fixed step. Same-rank edges and
     self-loops ignore all four (see :func:`_allocate_edge_anchors`'s
     docstring for why).
+
+    ``node_by_id`` lets the forward branch nudge an anchor off a border
+    cell the shape's outline never reaches (:func:`_forward_tip_anchor`);
+    without it every anchor stays on the bounding rect. ``frames`` (the
+    placed subgraph enclosures) is passed on to
+    :func:`_lane_secondary_base` so a back-edge lane clears them too.
     """
     src_rect = rects.get(edge.src)
     dst_rect = rects.get(edge.dst)
@@ -2670,9 +2785,14 @@ def _route_edge_path(
     if kind == "forward":
         exit_pt = exit_anchor if exit_anchor is not None else _forward_exit(direction, src_rect)
         entry_pt = entry_anchor if entry_anchor is not None else _forward_entry(direction, dst_rect)
+        nodes = node_by_id or {}
+        exit_pt = _forward_tip_anchor(direction, nodes.get(edge.src), src_rect, exit_pt)
+        entry_pt = _forward_tip_anchor(direction, nodes.get(edge.dst), dst_rect, entry_pt)
         return _z_path(direction, exit_pt, entry_pt, mid_p=mid_p)
 
-    lane_secondary = _lane_secondary_base(direction, rects) + _LANE_MARGIN + lane_offset
+    lane_secondary = (
+        _lane_secondary_base(direction, rects, frames) + _LANE_MARGIN + lane_offset
+    )
     exit_pt = exit_anchor if exit_anchor is not None else _lane_anchor(direction, src_rect)
     entry_pt = entry_anchor if entry_anchor is not None else _lane_anchor(direction, dst_rect)
     return _lane_path(direction, exit_pt, entry_pt, lane_secondary)
@@ -2810,6 +2930,8 @@ def _layout_at_label_width(
             rects, g.direction, g.edges, edge_label_width
         )
         edge_paths: list[tuple[int, FlowEdge, list[tuple[int, int]]]] = []
+        node_by_id = {n.id: n for n in g.nodes}
+        frame_rects = [fr for fr, _ in frames]
         for i, e in enumerate(g.edges):
             points = _route_edge_path(
                 rects,
@@ -2820,6 +2942,8 @@ def _layout_at_label_width(
                 entry_overrides.get(i),
                 row_overrides.get(i),
                 lane_offsets.get(i, 0),
+                node_by_id,
+                frame_rects,
             )
             if points is not None:
                 edge_paths.append((i, e, points))
