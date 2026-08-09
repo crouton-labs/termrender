@@ -148,7 +148,7 @@ _ARROW_RE = re.compile(
 
 _HEAD_KIND = {">>": "filled", ">": "open", "x": "lost", ")": "async"}
 _HEAD_GLYPH = {
-    "filled": {"right": ">", "left": "<"},
+    "filled": {"right": "▶", "left": "◀"},
     "open": {"right": "\u203a", "left": "\u2039"},  # › ‹
     "lost": {"right": "\u2717", "left": "\u2717"},  # ✗
     "async": {"right": ")", "left": "("},
@@ -412,13 +412,17 @@ def _line_row(
     row = _lifeline_row(diagram_width, centers)
     line_char = _LINE_CHAR[dashed]
     x0, x1 = centers[lo], centers[hi]
-    for x in range(x0, x1 + 1):
+    for x in range(x0 + 1, x1):
         row.set(x, line_char)
+    for x in centers[lo + 1 : hi]:
+        row.set(x, "┼")
     glyphs = _HEAD_GLYPH[head_kind]
     if rightwards:
-        row.set(x1, glyphs["right"])
+        row.set(x0, "├")
+        row.set(x1 - 1, glyphs["right"])
     else:
-        row.set(x0, glyphs["left"])
+        row.set(x1, "┤")
+        row.set(x0 + 1, glyphs["left"])
     return row.to_string()
 
 

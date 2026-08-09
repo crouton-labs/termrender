@@ -39,10 +39,10 @@ class TestGoldenBasicArrows(unittest.TestCase):
             "└───────┘                 └─────┘",
             "    │                        │",
             "     Hello Bob, how are you?",
-            "    ─────────────────────────>",
+            "    ├───────────────────────▶│",
             "    │                        │",
             "              Great!",
-            "    <╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌",
+            "    │◀╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤",
             "    │                        │",
             "┌───────┐                 ┌─────┐",
             "│ Alice │                 │ Bob │",
@@ -59,7 +59,7 @@ class TestGoldenBasicArrows(unittest.TestCase):
             "  │",
             "  ─╮",
             "  ││ Think",
-            "  <╯",
+            "  ◀╯",
             "  │",
             "┌───┐",
             "│ A │",
@@ -82,10 +82,10 @@ class TestGoldenBasicArrows(unittest.TestCase):
             "└───┘   └───┘",
             "  │       │",
             "   1: one",
-            "  ────────>",
+            "  ├──────▶│",
             "  │       │",
             "   2: two",
-            "  <────────",
+            "  │◀──────┤",
             "  │       │",
             "┌───┐   ┌───┐",
             "│ A │   │ B │",
@@ -111,44 +111,44 @@ class TestArrowVariants(unittest.TestCase):
 
     def test_solid_open(self):
         lines = self._arrow_lines("->")
-        self.assertTrue(any(l.rstrip().endswith("\u203a") for l in lines))  # ›
+        self.assertTrue(any("›│" in l for l in lines))
         self.assertTrue(any("\u2500" in l for l in lines))
         self.assertFalse(any("\u254c" in l for l in lines))
 
     def test_dashed_open(self):
         lines = self._arrow_lines("-->")
-        self.assertTrue(any(l.rstrip().endswith("\u203a") for l in lines))
+        self.assertTrue(any("›│" in l for l in lines))
         self.assertTrue(any("\u254c" in l for l in lines))
 
     def test_solid_filled(self):
         lines = self._arrow_lines("->>")
-        self.assertTrue(any(l.rstrip().endswith(">") for l in lines))
+        self.assertTrue(any("▶│" in l for l in lines))
         self.assertTrue(any("\u2500" in l for l in lines))
         self.assertFalse(any("\u254c" in l for l in lines))
 
     def test_dashed_filled(self):
         lines = self._arrow_lines("-->>")
-        self.assertTrue(any(l.rstrip().endswith(">") for l in lines))
+        self.assertTrue(any("▶│" in l for l in lines))
         self.assertTrue(any("\u254c" in l for l in lines))
 
     def test_solid_lost(self):
         lines = self._arrow_lines("-x")
-        self.assertTrue(any(l.rstrip().endswith("\u2717") for l in lines))  # ✗
+        self.assertTrue(any("✗│" in l for l in lines))
         self.assertFalse(any("\u254c" in l for l in lines))
 
     def test_dashed_lost(self):
         lines = self._arrow_lines("--x")
-        self.assertTrue(any(l.rstrip().endswith("\u2717") for l in lines))
+        self.assertTrue(any("✗│" in l for l in lines))
         self.assertTrue(any("\u254c" in l for l in lines))
 
     def test_solid_async(self):
         lines = self._arrow_lines("-)")
-        self.assertTrue(any(l.rstrip().endswith(")") for l in lines))
+        self.assertTrue(any(")│" in l for l in lines))
         self.assertFalse(any("\u254c" in l for l in lines))
 
     def test_dashed_async(self):
         lines = self._arrow_lines("--)")
-        self.assertTrue(any(l.rstrip().endswith(")") for l in lines))
+        self.assertTrue(any(")│" in l for l in lines))
         self.assertTrue(any("\u254c" in l for l in lines))
 
     def test_reverse_direction_arrowhead_points_left(self):
@@ -157,7 +157,8 @@ class TestArrowVariants(unittest.TestCase):
         arrow_line = next(
             l for l in lines if "\u2500" in l and "\u250c" not in l and "\u2514" not in l
         )
-        self.assertTrue(arrow_line.lstrip().startswith("<"))
+        self.assertIn("│◀", arrow_line)
+        self.assertTrue(arrow_line.endswith("┤"))
 
 
 class TestParticipantsAndAliases(unittest.TestCase):
@@ -417,7 +418,10 @@ class TestMultiHopSpacing(unittest.TestCase):
         arrow_line = next(
             l for l in lines if "\u2500" in l and "\u250c" not in l and "\u2514" not in l
         )
-        # the arrow line must span at least as wide as the label text needs
+        # The row preserves source, target, and the crossed intermediate lifeline.
+        self.assertIn("├", arrow_line)
+        self.assertIn("┼", arrow_line)
+        self.assertIn("▶│", arrow_line)
         self.assertGreaterEqual(len(arrow_line), len("a rather long message across two hops"))
 
     def test_self_message_on_last_participant_does_not_crash(self):
