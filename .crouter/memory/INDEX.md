@@ -13,4 +13,4 @@ origin:
 
 # termrender memory
 
-- `AGENTS` — downstream release handoff through Humanloop and its consumers.
+- `AGENTS` — downstream release handoff through crouter and Northlight's shared guest image.

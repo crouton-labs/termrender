@@ -13,5 +13,5 @@ origin:
 
 ## Release handoff
 
-- Humanloop is termrender's sole org-wide binding. It pins an exact PyPI version in `/Users/silasrhyneer/Code/cli/humanloop/src/render/version.ts` and owns the managed renderer venv; other products consume termrender through Humanloop rather than installing it directly.
-- After a termrender release is published, continue the delivery chain by bumping Humanloop's `TERMRENDER_VERSION`, verifying its managed-renderer path, and publishing Humanloop. Then follow `crtr memory read humanloop` for the verified downstream consumer chain; do not stop at the termrender publish or assume a local editable/pipx install updated consumers.
+- Crouter is termrender's sole org-wide binding. It pins the exact PyPI release in `src/core/termrender/version.ts` and owns the managed renderer venv; product surfaces consume termrender through crouter rather than installing it directly.
+- After publishing termrender, bump crouter's `TERMRENDER_VERSION`, verify the managed-renderer path, and publish crouter. Then bump `CRTR_VERSION` in Northlight's `apps/crouter-guest/build.env` and rebuild/roll the shared guest image used by both Blaxel and local Docker; do not stop at the PyPI release or assume a local install updated consumers.
