@@ -3,12 +3,13 @@ kind: knowledge
 when-and-why-to-read: When changing or publishing termrender, this knowledge
   should be read because a green PyPI release alone does not put the renderer
   fix into the product surfaces users run.
-system-prompt-visibility: content
-file-read-visibility: none
 origin:
   created: 2026-07-25T01:17:22.493Z
   cwd: /Users/silasrhyneer/Code/cli/crouter
   node: 3zl47w7d-mrznzuss-0d6c2d50
+surfaces:
+  - on: boot
+    at: content
 ---
 
 ## Release handoff
