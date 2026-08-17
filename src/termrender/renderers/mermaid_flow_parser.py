@@ -32,12 +32,13 @@ Grammar covered
   by connectors, emitting one edge per adjacent (group, connector, group)
   triple, with each connector's own style/label/arrows applied only to the
   edge it introduces. Connector scanning, ``&`` fan-out splitting, and
-  ``;`` statement splitting are all bracket-depth-aware: a token that looks
-  like a connector, ``&``, or ``;`` but sits inside ``[...]``/``(...)``/
-  ``{...}`` (part of a node label, e.g. ``A[Go --> Fast]`` or
-  ``A[Check; validate]``) is left untouched rather than mistaken for
-  statement structure. Newlines and semicolons inside double-quoted labels
-  remain label content instead of splitting statements. Empty-string labels
+  ``;`` statement splitting all skip anything below statement level: a token
+  that looks like a connector, ``&``, or ``;`` but sits inside
+  ``[...]``/``(...)``/``{...}`` (part of a node label, e.g.
+  ``A[Go --> Fast]`` or ``A[Check; validate]``), inside a double-quoted
+  label, or inside a ``|...|`` edge label (e.g. ``A -->|a & b| B`` or an
+  HTML entity's terminating ``;`` in ``A -->|x &lt;y&gt;| B``) is left
+  untouched rather than mistaken for statement structure. Empty-string labels
   (``A -->|| B``) are stored as ``None``. Labels are normalized: one pair of
   wrapping double quotes (mermaid's quoted-label form) is stripped, and
   ``<br/>`` (any case, optional slash/spaces) becomes a real newline in node
@@ -219,52 +220,53 @@ def _norm_node_label(text: str) -> str:
     return decode_entities(_BR_RE.sub("\n", _strip_quotes(text)).strip())
 
 
-def _bracket_depths(text: str) -> list[int]:
-    """``depths[i]`` = bracket depth immediately before ``text[i]``
-    (``depths[len(text)]`` = depth at end of string). Shared by every
-    top-level scanner below (connector matching, ``&`` splitting, ``;``
-    splitting) to decide whether a candidate token sits inside a node
-    label's ``[...]``/``(...)``/``{...}`` delimiters and should therefore
-    be ignored rather than treated as statement structure."""
-    depths = [0] * (len(text) + 1)
+def _statement_level(text: str) -> list[bool]:
+    """``mask[i]`` is True when ``text[i]`` sits at statement level —
+    outside node-shape ``[...]``/``(...)``/``{...}`` delimiters, outside a
+    double-quoted label, and outside a ``|...|`` edge label. Shared by
+    every top-level scanner below (connector matching, ``&`` splitting,
+    ``;`` splitting) so a token that only looks structural inside a label
+    is left untouched. ``mask[len(text)]`` lets a scanner probe the end of
+    the string.
+
+    Brackets are not tracked inside an edge label: mermaid lexes that text
+    verbatim, so an unbalanced ``(`` there must not shift the depth of the
+    rest of the statement."""
+    mask = [True] * (len(text) + 1)
     depth = 0
+    in_quote = False
+    in_pipe = False
+    escaped = False
     for i, ch in enumerate(text):
-        depths[i] = depth
-        if ch in _OPENERS:
-            depth += 1
-        elif ch in _CLOSERS:
-            depth = max(0, depth - 1)
-    depths[len(text)] = depth
-    return depths
+        mask[i] = depth == 0 and not in_quote and not in_pipe
+        if ch == '"' and not escaped:
+            in_quote = not in_quote
+        elif not in_quote:
+            if ch == "|" and depth == 0:
+                in_pipe = not in_pipe
+            elif not in_pipe:
+                if ch in _OPENERS:
+                    depth += 1
+                elif ch in _CLOSERS:
+                    depth = max(0, depth - 1)
+        escaped = ch == "\\" and not escaped
+    mask[len(text)] = depth == 0 and not in_quote and not in_pipe
+    return mask
 
 
 def _split_top_level(text: str, sep: str) -> list[str]:
-    """Split ``text`` on top-level occurrences of the single-character
-    ``sep`` only — a ``sep`` nested inside a node shape or double-quoted
-    label is left untouched."""
+    """Split ``text`` on statement-level occurrences of the
+    single-character ``sep`` only — a ``sep`` nested inside a node shape,
+    a double-quoted label, or a ``|...|`` edge label is left untouched."""
+    mask = _statement_level(text)
     parts: list[str] = []
     buf: list[str] = []
-    depth = 0
-    in_quote = False
-    escaped = False
-    for ch in text:
-        if ch == '"' and not escaped:
-            in_quote = not in_quote
-            buf.append(ch)
-        elif not in_quote and ch in _OPENERS:
-            depth += 1
-            buf.append(ch)
-        elif not in_quote and ch in _CLOSERS:
-            depth = max(0, depth - 1)
-            buf.append(ch)
-        elif ch == sep and depth == 0 and not in_quote:
+    for i, ch in enumerate(text):
+        if ch == sep and mask[i]:
             parts.append("".join(buf))
             buf = []
         else:
             buf.append(ch)
-        escaped = ch == "\\" and not escaped
-        if ch != "\\":
-            escaped = False
     parts.append("".join(buf))
     return parts
 
@@ -282,14 +284,14 @@ def _scan_connectors(text: str) -> list[re.Match[str]]:
     ``A[Go --> Fast]``) is skipped rather than accepted, and the scan
     resumes one character past the skipped match's start so a real
     top-level connector later in the same text is still found."""
-    depths = _bracket_depths(text)
+    mask = _statement_level(text)
     matches: list[re.Match[str]] = []
     pos = 0
     while pos <= len(text):
         m = _CONNECTOR_RE.search(text, pos)
         if not m:
             break
-        if depths[m.start()] == 0:
+        if mask[m.start()]:
             matches.append(m)
             pos = m.end()
         else:

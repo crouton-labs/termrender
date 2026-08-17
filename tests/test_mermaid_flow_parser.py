@@ -227,6 +227,16 @@ def test_semicolon_inside_quoted_edge_label_does_not_split_statement():
     assert _edges(g, "A", "B")[0].label == "first; second"
 
 
+def test_entity_semicolon_inside_unquoted_edge_label_does_not_split_statement():
+    g = parse("graph TD\nA-->|POST /events/&lt;name&gt;| B\n")
+    assert _edges(g, "A", "B")[0].label == "POST /events/<name>"
+
+
+def test_ampersand_inside_unquoted_edge_label_is_not_fan_out():
+    g = parse("graph TD\nA-->|read & write| B\n")
+    assert _edges(g, "A", "B")[0].label == "read & write"
+
+
 def test_unmatched_quote_in_comment_does_not_join_following_statement():
     g = parse('graph TD\n%% someone said "hello\nA-->B\n')
     assert len(_edges(g, "A", "B")) == 1
