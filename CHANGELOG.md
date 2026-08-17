@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v4.12.8 (2026-08-17)
+
+### Bug Fixes
+
+- **mermaid**: Treat unquoted pipe edge labels as label text, not statement structure
+  ([`e210bbb`](https://github.com/crouton-labs/termrender/commit/e210bbb48b026610bcbe4511d7e0ca8f83ea4a31))
+
+### Chores
+
+- **memory**: Migrate memory stores to surfaces routing
+  ([`5725d4e`](https://github.com/crouton-labs/termrender/commit/5725d4eab7832b2ee842a2f0a56927aad58a9c76))
+
+
 ## v4.12.7 (2026-08-09)
 
 ### Bug Fixes
