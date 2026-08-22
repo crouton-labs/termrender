@@ -43,7 +43,7 @@ from __future__ import annotations
 import html
 import re
 
-from termrender.style import BOLD, ITALIC, RESET
+from termrender.style import BOLD, ITALIC, sgr_transition
 
 # Numeric codes (``&#35;`` / ``#35;`` / ``&#x2b;`` / ``#x2b;``) in group 1,
 # named ones (``&lt;`` / ``#quot;``) in group 2. Both prefixes are accepted for
@@ -76,6 +76,11 @@ _EMPHASIS_SGR: dict[str, str] = {
 def apply_emphasis(text: str) -> str:
     """Replace mermaid's inline emphasis tags in ``text`` with ANSI SGR runs.
 
+    A run ends with the attribute's own disable code (SGR 22 for bold, 23
+    for italic) rather than a full reset, so a label drawn inside a host's
+    styling stops the emphasis without clearing the host's colour for every
+    cell that follows it on the line.
+
     Tags nest (``<b>a<i>b</i>c</b>``) and are matched innermost-first; a
     close tag with no matching open one is dropped rather than echoed, and a
     tag left open at the end of the label is closed for you. An escape is
@@ -101,14 +106,7 @@ def apply_emphasis(text: str) -> str:
             return
         want = "".join(_EMPHASIS_SGR[t] for t in dict.fromkeys(open_tags))
         if want != emitted:
-            # SGR is additive, so opening a tag inside another only needs
-            # the new code; anything else has to reset and re-open.
-            if want.startswith(emitted):
-                out.append(want[len(emitted):])
-            else:
-                if emitted:
-                    out.append(RESET)
-                out.append(want)
+            out.append(sgr_transition(emitted, want))
             emitted = want
         out.append(chunk)
 
@@ -127,7 +125,7 @@ def apply_emphasis(text: str) -> str:
     write(text[pos:])
 
     if emitted:
-        out.append(RESET)
+        out.append(sgr_transition(emitted, ""))
     return "".join(out)
 
 

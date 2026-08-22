@@ -16,7 +16,16 @@ from termrender.renderers.mermaid_flow import render_flowchart
 from termrender.renderers.mermaid_flow_layout import _wrap_label
 from termrender.renderers.mermaid_flow_parser import parse
 from termrender.renderers.mermaid_text import apply_emphasis
-from termrender.style import ANSI_RE, BOLD, ITALIC, RESET, active_sgr, visual_len
+from termrender.style import (
+    ANSI_RE,
+    BOLD,
+    BOLD_OFF,
+    ITALIC,
+    ITALIC_OFF,
+    RESET,
+    active_sgr,
+    visual_len,
+)
 
 _SRC = 'flowchart LR\n  A["what you author<br/><b>dialect</b>"] --> B["jsx"]'
 
@@ -32,18 +41,23 @@ def _render(source: str, width: int, color: bool) -> list[str]:
 
 
 def test_apply_emphasis_styles_the_supported_tags():
-    assert apply_emphasis("<b>x</b>") == f"{BOLD}x{RESET}"
-    assert apply_emphasis("<strong>x</strong>") == f"{BOLD}x{RESET}"
-    assert apply_emphasis("<i>x</i>") == f"{ITALIC}x{RESET}"
-    assert apply_emphasis("<EM>x</em>") == f"{ITALIC}x{RESET}"
+    assert apply_emphasis("<b>x</b>") == f"{BOLD}x{BOLD_OFF}"
+    assert apply_emphasis("<strong>x</strong>") == f"{BOLD}x{BOLD_OFF}"
+    assert apply_emphasis("<i>x</i>") == f"{ITALIC}x{ITALIC_OFF}"
+    assert apply_emphasis("<EM>x</em>") == f"{ITALIC}x{ITALIC_OFF}"
 
 
 def test_apply_emphasis_nests_and_self_closes():
+    # Each close turns off only its own attribute, so the enclosing run
+    # never has to be re-opened.
     assert apply_emphasis("<b>a<i>b</i>c</b>") == (
-        f"{BOLD}a{ITALIC}b{RESET}{BOLD}c{RESET}"
+        f"{BOLD}a{ITALIC}b{ITALIC_OFF}c{BOLD_OFF}"
+    )
+    assert apply_emphasis("<i>a<b>b</b>c</i>") == (
+        f"{ITALIC}a{BOLD}b{BOLD_OFF}c{ITALIC_OFF}"
     )
     # Left open by the author, closed by us; a stray close is dropped.
-    assert apply_emphasis("<b>a") == f"{BOLD}a{RESET}"
+    assert apply_emphasis("<b>a") == f"{BOLD}a{BOLD_OFF}"
     assert apply_emphasis("a</b>") == "a"
     # An empty pair yields nothing at all, not a zero-width styled run.
     assert apply_emphasis("<b></b>") == ""
@@ -64,14 +78,14 @@ def test_escaped_tags_stay_literal():
 
 def test_node_and_edge_labels_style():
     g = parse('flowchart LR\n  A["<b>node</b>"] -->|"<i>edge</i>"| B')
-    assert _node(g, "A").label == f"{BOLD}node{RESET}"
-    assert g.edges[0].label == f"{ITALIC}edge{RESET}"
+    assert _node(g, "A").label == f"{BOLD}node{BOLD_OFF}"
+    assert g.edges[0].label == f"{ITALIC}edge{ITALIC_OFF}"
 
 
 def test_tags_never_reach_the_screen_and_bold_does():
     on = "\n".join(_render(_SRC, 60, color=True))
     assert "<b>" not in on and "</b>" not in on
-    assert f"{BOLD}dialect{RESET}" in on
+    assert f"{BOLD}dialect{BOLD_OFF}" in on
 
 
 def test_color_off_leaves_clean_unstyled_text():
@@ -96,7 +110,7 @@ def test_emphasized_wide_glyphs_keep_their_columns():
     # measuring cells wrong both show up at once.
     lines = render_flowchart('flowchart LR\n  A["日本語<b>太字</b>です"] --> B["x"]', 40)
     box = [line for line in lines if BOLD in line]
-    assert box and f"{BOLD}太字{RESET}" in box[0]
+    assert box and f"{BOLD}太字{BOLD_OFF}" in box[0]
     plain = render_flowchart('flowchart LR\n  A["日本語太字です"] --> B["x"]', 40)
     assert [ANSI_RE.sub("", line) for line in lines] == plain
 
@@ -128,6 +142,43 @@ def test_emphasized_edge_label_wraps_without_leaking():
     assert "<b>" not in joined and BOLD in joined
     for row in lines:
         assert active_sgr(row) == ""
+
+
+def test_emphasis_never_ends_with_a_full_reset():
+    # Regression: closing an emphasis run with SGR 0 wiped the colour the
+    # host had set around the diagram, so every cell after the emphasized
+    # word — the label's padding and the box's right border — lost it while
+    # the rest of the diagram kept it. Bold must end at SGR 22 and italic at
+    # SGR 23, and no reset may appear anywhere in the drawn diagram.
+    rows = render_flowchart(
+        'flowchart LR\n  A["plain <b>bold</b> and <i>italic</i> tail"] --> B["x"]',
+        70,
+    )
+    # Wrapping re-opens a run on each line and a nested run unwinds one
+    # attribute at a time; neither may reach for a reset.
+    nested = render_flowchart(
+        'flowchart TD\n  A["<i>italic with <b>bold inside</b> back to italic</i>"]'
+        ' --> B["x"]',
+        34,
+    )
+    for drawn in (rows, nested):
+        params = {
+            p
+            for escape in ANSI_RE.findall("\n".join(drawn))
+            for p in escape[2:-1].split(";")
+        }
+        # Both attributes are turned off by their own code (a close may
+        # combine them, e.g. ``\x1b[23;22m``), and SGR 0 is never used.
+        assert {"22", "23"} <= params
+        assert "0" not in params
+        assert RESET not in "\n".join(drawn)
+        # ...and nothing termrender opened is left running at a line's end,
+        # so no styling escapes the diagram either.
+        for row in drawn:
+            assert active_sgr(row) == ""
+    # At the source level the codes stand alone and are exactly these.
+    assert apply_emphasis("<b>x</b>").endswith(BOLD_OFF)
+    assert apply_emphasis("<i>x</i>").endswith(ITALIC_OFF)
 
 
 def test_styling_survives_wrapping():

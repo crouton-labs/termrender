@@ -88,6 +88,24 @@ BOLD = '\x1b[1m'
 ITALIC = '\x1b[3m'
 DIM = '\x1b[2m'
 
+# The attribute-scoped "off" codes. Ending a run with one of these turns off
+# exactly that attribute and leaves every other attribute in force — unlike
+# RESET (SGR 0), which also clears whatever styling the *host* embedding this
+# output had set. See :func:`sgr_transition`.
+BOLD_OFF = '\x1b[22m'      # normal intensity: cancels both bold and dim
+ITALIC_OFF = '\x1b[23m'
+
+# Which parameter turns each attribute off. Only the attributes termrender
+# opens mid-line are listed; a colour has no code that restores the host's
+# colour (SGR 39/49 restore the *terminal's* default, which is a different
+# thing), so a run holding one is still closed with a full reset.
+_SGR_OFF: dict[str, str] = {
+    '1': '22',
+    '2': '22',
+    '3': '23',
+}
+_SGR_OFF_CODES = frozenset(_SGR_OFF.values())
+
 # Color name -> ANSI code mapping
 COLOR_MAP: dict[str, str] = {
     'red': '\x1b[31m',
@@ -152,7 +170,10 @@ def style(
         prefix += DIM
     if not prefix:
         return text
-    return prefix + text + RESET
+    # A pure-attribute run closes with its own disable codes so it can sit
+    # inside a host's styling; one carrying a colour still closes with a
+    # full reset, because no code restores a colour this process never set.
+    return prefix + text + sgr_transition(prefix, '')
 
 
 def _char_width(c: str) -> int:
@@ -195,12 +216,65 @@ def visual_len(s: str) -> int:
     return width
 
 
-def _fold_sgr(active: str, escape: str) -> str:
-    """Apply one SGR ``escape`` to the ``active`` sequence: a reset clears it,
-    anything else accumulates onto it."""
-    if escape in ('\x1b[0m', '\x1b[m'):
+def _sgr_params(seq: str) -> list[str]:
+    """Every SGR parameter in ``seq``, in order. ``\\x1b[1;31m`` is two
+    parameters and ``\\x1b[m`` is the bare reset, spelled ``'0'`` here."""
+    params: list[str] = []
+    for m in ANSI_RE.finditer(seq):
+        body = m.group(0)[2:-1]
+        params.extend(body.split(';') if body else ['0'])
+    return params
+
+
+def _fold_params(params: list[str]) -> list[str]:
+    """The attributes left in force after ``params`` are applied in order: a
+    reset clears everything, an "off" code clears just the attributes it
+    names, anything else accumulates."""
+    active: list[str] = []
+    for p in params:
+        if p in ('', '0'):
+            active = []
+        elif p in _SGR_OFF_CODES:
+            active = [q for q in active if _SGR_OFF.get(q) != p]
+        elif p not in active:
+            active.append(p)
+    return active
+
+
+def _render_params(params: list[str]) -> str:
+    return ''.join(f'\x1b[{p}m' for p in params)
+
+
+def sgr_transition(current: str, wanted: str) -> str:
+    """The escapes that move a terminal from ``current`` styling to ``wanted``.
+
+    Attributes no longer wanted are turned off with their own disable code
+    (SGR 22 for bold, 23 for italic), never with SGR 0, so styling applied by
+    whatever host surrounds this output — a foreground colour on the region
+    the diagram is drawn into — survives the run's end. A run that has no
+    such code for something it opened (a colour) still closes with a full
+    reset, and ``wanted`` is re-opened after it.
+
+    ``sgr_transition(active, "")`` is therefore "close this run", and
+    ``sgr_transition("", active)`` is "open it".
+    """
+    cur = _fold_params(_sgr_params(current))
+    want = _fold_params(_sgr_params(wanted))
+    if cur == want:
         return ''
-    return active + escape
+    stale = [p for p in cur if p not in want]
+    if not stale:
+        return _render_params([p for p in want if p not in cur])
+    if any(p not in _SGR_OFF for p in stale):
+        return RESET + _render_params(want)
+    offs = list(dict.fromkeys(_SGR_OFF[p] for p in stale))
+    # One disable code can cancel an attribute still wanted (22 turns off
+    # bold *and* dim), so re-open anything it takes down with it.
+    reopen = [
+        p for p in want
+        if p not in cur or _SGR_OFF.get(p) in offs
+    ]
+    return f"\x1b[{';'.join(offs)}m" + _render_params(reopen)
 
 
 def styled_clusters(s: str) -> Iterator[tuple[str, str]]:
@@ -213,24 +287,23 @@ def styled_clusters(s: str) -> Iterator[tuple[str, str]]:
     the guarantee the mermaid flow canvas needs to place a styled label
     into its character grid.
     """
-    active = ''
+    active: list[str] = []
+    rendered = ''
     pos = 0
     for m in ANSI_RE.finditer(s):
         for cluster in grapheme_clusters(s[pos:m.start()]):
-            yield active, cluster
-        active = _fold_sgr(active, m.group(0))
+            yield rendered, cluster
+        active = _fold_params(active + _sgr_params(m.group(0)))
+        rendered = _render_params(active)
         pos = m.end()
     for cluster in grapheme_clusters(s[pos:]):
-        yield active, cluster
+        yield rendered, cluster
 
 
 def active_sgr(s: str) -> str:
     """The ANSI SGR sequence still in force after ``s`` — what a following
     line must re-open to continue ``s``'s styling."""
-    active = ''
-    for m in ANSI_RE.finditer(s):
-        active = _fold_sgr(active, m.group(0))
-    return active
+    return _render_params(_fold_params(_sgr_params(s)))
 
 
 def visual_ljust(s: str, width: int) -> str:

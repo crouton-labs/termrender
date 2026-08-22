@@ -183,9 +183,9 @@ from termrender.renderers.mermaid_flow_model import (
 )
 from termrender.style import (
     ANSI_RE,
-    RESET,
     active_sgr,
     grapheme_clusters,
+    sgr_transition,
     styled_clusters,
     visual_center,
     visual_len,
@@ -2300,6 +2300,12 @@ def _write_label_run(
     whole row is planned before anything is written, since a skipped
     (already-reserved) cell ends a run early and the styling must not bleed
     past it onto a border.
+
+    Runs open and close through :func:`~termrender.style.sgr_transition`, so
+    a closing cell emits the attribute's own disable code instead of a full
+    reset: the diagram may be drawn inside a host's own styling, and every
+    cell after an emphasized word — the padding and the box's right border
+    — has to keep the host's colour.
     """
     plan: list[tuple[int, str, str, int, bool]] = []
     x = start
@@ -2314,11 +2320,11 @@ def _write_label_run(
         if writable:
             text = cluster
             if sgr != open_sgr:
-                text = (RESET if open_sgr else "") + sgr + cluster
+                text = sgr_transition(open_sgr, sgr) + cluster
                 open_sgr = sgr
             nxt = plan[i + 1] if i + 1 < len(plan) else None
             if open_sgr and (nxt is None or not nxt[4] or nxt[1] != open_sgr):
-                text += RESET
+                text += sgr_transition(open_sgr, "")
                 open_sgr = ""
             canvas.set_char(cx0, row, text, reserve=True)
         for extra in range(1, w):
