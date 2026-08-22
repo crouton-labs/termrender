@@ -96,7 +96,7 @@ from termrender.renderers.mermaid_flow_model import (
     Subgraph,
 )
 from termrender.renderers.mermaid_prelude import strip_prelude_lines
-from termrender.renderers.mermaid_text import BREAK_RE, decode_entities
+from termrender.renderers.mermaid_text import BREAK_RE, apply_emphasis, decode_entities
 
 __all__ = ["parse", "FlowchartError"]
 
@@ -200,24 +200,27 @@ def _strip_quotes(text: str) -> str:
 
 
 def _norm_label(text: str | None) -> str | None:
-    """Normalize an *edge* label: strip wrapping quotes, decode entity codes,
-    and flatten a line break (``<br/>`` or ``\n``) to a space — edge labels
-    render on a single line
-    along the path, so a hard break has nowhere to go."""
+    """Normalize an *edge* label: strip wrapping quotes, turn the inline
+    emphasis tags into ANSI runs, decode entity codes, and flatten a line
+    break (``<br/>`` or ``\n``) to a space — edge labels render on a single
+    line along the path, so a hard break has nowhere to go."""
     if text is None:
         return None
     stripped = _BR_RE.sub(" ", _strip_quotes(text.strip()))
     stripped = re.sub(r"\s*\n\s*", " ", stripped).strip()
-    return decode_entities(stripped) or None
+    if not stripped:
+        return None
+    return decode_entities(apply_emphasis(stripped)) or None
 
 
 def _norm_node_label(text: str) -> str:
-    """Normalize a *node* label: strip wrapping quotes, decode entity codes,
-    and turn a line break (``<br/>`` or ``\n``) into a real newline — node
+    """Normalize a *node* label: strip wrapping quotes, turn the inline
+    emphasis tags into ANSI runs, decode entity codes, and turn a line break
+    (``<br/>`` or ``\n``) into a real newline — node
     labels are drawn via
     ``wrap_text``, which honors ``\\n``, for both box sizing and label
     placement."""
-    return decode_entities(_BR_RE.sub("\n", _strip_quotes(text)).strip())
+    return decode_entities(apply_emphasis(_BR_RE.sub("\n", _strip_quotes(text)).strip()))
 
 
 def _statement_level(text: str) -> list[bool]:

@@ -195,6 +195,44 @@ def visual_len(s: str) -> int:
     return width
 
 
+def _fold_sgr(active: str, escape: str) -> str:
+    """Apply one SGR ``escape`` to the ``active`` sequence: a reset clears it,
+    anything else accumulates onto it."""
+    if escape in ('\x1b[0m', '\x1b[m'):
+        return ''
+    return active + escape
+
+
+def styled_clusters(s: str) -> Iterator[tuple[str, str]]:
+    """Yield ``(sgr, cluster)`` for every *visible* grapheme cluster in ``s``.
+
+    ``sgr`` is the ANSI SGR sequence in force at that cluster (``''`` when
+    unstyled), folded from every escape preceding it. Escapes are never
+    yielded as clusters, so a caller that lays text out cell by cell can
+    neither split one across cells nor count one toward a visual width —
+    the guarantee the mermaid flow canvas needs to place a styled label
+    into its character grid.
+    """
+    active = ''
+    pos = 0
+    for m in ANSI_RE.finditer(s):
+        for cluster in grapheme_clusters(s[pos:m.start()]):
+            yield active, cluster
+        active = _fold_sgr(active, m.group(0))
+        pos = m.end()
+    for cluster in grapheme_clusters(s[pos:]):
+        yield active, cluster
+
+
+def active_sgr(s: str) -> str:
+    """The ANSI SGR sequence still in force after ``s`` — what a following
+    line must re-open to continue ``s``'s styling."""
+    active = ''
+    for m in ANSI_RE.finditer(s):
+        active = _fold_sgr(active, m.group(0))
+    return active
+
+
 def visual_ljust(s: str, width: int) -> str:
     vl = visual_len(s)
     if vl >= width:

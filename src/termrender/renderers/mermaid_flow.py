@@ -88,10 +88,18 @@ def render_flowchart(source: str, width: int) -> list[str]:
        but the guarantee is "never crash, degrade" regardless.
 
     Otherwise, returns the rendered diagram: guaranteed to contain unicode
-    box-drawing glyphs (every node is a bordered box), never ANSI escapes.
-    The distinction matters downstream — code that detects render success
-    by the *presence* of box-drawing glyphs relies on the echo path never
-    emitting any.
+    box-drawing glyphs (every node is a bordered box). The distinction
+    matters downstream — code that detects render success by the *presence*
+    of box-drawing glyphs relies on the echo path never emitting any.
+
+    The only ANSI in the output is the emphasis a label's own ``<b>``/
+    ``<i>`` markup asked for (see ``mermaid_text.apply_emphasis``). Those
+    escapes cost no display columns and every geometry decision measures
+    with ``visual_len``, so the drawn layout is identical with or without
+    them; ``mermaid.py``'s ``render`` strips them for ``--color off``. The
+    raw-echo degradation paths introduce no escapes of their own (they echo
+    the source, which is only ever escape-bearing if the author's own source
+    was).
 
     Args:
         source: The mermaid fence body (with or without the surrounding

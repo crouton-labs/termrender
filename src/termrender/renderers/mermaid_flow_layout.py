@@ -181,7 +181,15 @@ from termrender.renderers.mermaid_flow_model import (
     NodeShape,
     Subgraph,
 )
-from termrender.style import grapheme_clusters, visual_center, visual_len
+from termrender.style import (
+    ANSI_RE,
+    RESET,
+    active_sgr,
+    grapheme_clusters,
+    styled_clusters,
+    visual_center,
+    visual_len,
+)
 
 __all__ = ["layout_flowgraph", "Canvas", "BoxRect"]
 
@@ -194,19 +202,62 @@ __all__ = ["layout_flowgraph", "Canvas", "BoxRect"]
 def _prefix_within_cells(word: str, cells: int) -> str:
     """Longest prefix of ``word`` whose glyphs fit ``cells`` display
     columns — the cell-aware substitute for ``word[:n]`` when hard-breaking
-    an over-long word."""
-    out: list[str] = []
+    an over-long word.
+
+    An ANSI escape costs no columns and is never cut in half: it is kept
+    whole in whichever side of the break it starts on. The escape a break
+    strands (an opening run whose text continues on the next line) is
+    re-opened there by :func:`_carry_sgr`.
+    """
     used = 0
-    for cluster in grapheme_clusters(word):
+    end = 0
+    pos = 0
+    for m in ANSI_RE.finditer(word):
+        for cluster in grapheme_clusters(word[pos:m.start()]):
+            w = visual_len(cluster)
+            if used + w > cells:
+                return word[:end]
+            used += w
+            end += len(cluster)
+        end = m.end()
+        pos = m.end()
+    for cluster in grapheme_clusters(word[pos:]):
         w = visual_len(cluster)
         if used + w > cells:
             break
-        out.append(cluster)
         used += w
-    return "".join(out)
+        end += len(cluster)
+    return word[:end]
+
+
+def _carry_sgr(lines: list[str]) -> list[str]:
+    """Re-open on each line whatever ANSI styling the previous lines left
+    running, so every wrapped line stands on its own.
+
+    Wrapping splits on spaces and hard-breaks long words, so an emphasis run
+    that spans a break has its opening escape on the first line only — the
+    continuation would render unstyled without this. No closing reset is
+    appended: a label line is written cell by cell by
+    :func:`_write_label_run`, which closes each styled run on the last cell
+    it actually reaches.
+    """
+    active = ""
+    out: list[str] = []
+    for line in lines:
+        carried = active + line
+        active = active_sgr(carried)
+        out.append(carried)
+    return out
 
 
 def _wrap_label(text: str, cells: int) -> list[str]:
+    """Word-wrap ``text`` to ``cells`` display columns, keeping any ANSI
+    styling alive across every line break — see :func:`_wrap_label_raw` for
+    the wrapping itself and :func:`_carry_sgr` for the styling."""
+    return _carry_sgr(_wrap_label_raw(text, cells))
+
+
+def _wrap_label_raw(text: str, cells: int) -> list[str]:
     """Word-wrap ``text`` to ``cells`` *display columns*.
 
     Same greedy algorithm as :func:`termrender.style.wrap_text` (and
@@ -228,7 +279,7 @@ def _wrap_label(text: str, cells: int) -> list[str]:
     if "\n" in text:
         out: list[str] = []
         for seg in text.split("\n"):
-            out.extend(_wrap_label(seg, cells))
+            out.extend(_wrap_label_raw(seg, cells))
         return out
     if text.isspace():
         return [""]
@@ -2240,17 +2291,40 @@ def _write_label_run(
     overflow-tolerated fallback placement instead skips any individual
     cell that's already reserved, one cell at a time (never overwriting a
     box).
+
+    ANSI styling in ``label`` rides *inside* the cells its text occupies and
+    never widens the run: the walk is over
+    :func:`~termrender.style.styled_clusters`, so an escape is never taken
+    for a glyph nor split across two cells. A styled run opens on its first
+    cell and closes on the last cell it actually reaches — which is why the
+    whole row is planned before anything is written, since a skipped
+    (already-reserved) cell ends a run early and the styling must not bleed
+    past it onto a border.
     """
+    plan: list[tuple[int, str, str, int, bool]] = []
     x = start
-    for cluster in grapheme_clusters(label):
+    for sgr, cluster in styled_clusters(label):
         w = visual_len(cluster)
-        if not check_reserved or not canvas.is_reserved(x, row):
-            canvas.set_char(x, row, cluster, reserve=True)
+        writable = not check_reserved or not canvas.is_reserved(x, row)
+        plan.append((x, sgr, cluster, w, writable))
+        x += w
+
+    open_sgr = ""
+    for i, (cx0, sgr, cluster, w, writable) in enumerate(plan):
+        if writable:
+            text = cluster
+            if sgr != open_sgr:
+                text = (RESET if open_sgr else "") + sgr + cluster
+                open_sgr = sgr
+            nxt = plan[i + 1] if i + 1 < len(plan) else None
+            if open_sgr and (nxt is None or not nxt[4] or nxt[1] != open_sgr):
+                text += RESET
+                open_sgr = ""
+            canvas.set_char(cx0, row, text, reserve=True)
         for extra in range(1, w):
-            cx = x + extra
+            cx = cx0 + extra
             if not check_reserved or not canvas.is_reserved(cx, row):
                 canvas.set_char(cx, row, "", reserve=True)
-        x += w
 
 
 _LABEL_SCAN_CAP = 400  # generous bound on how far a label's clear-run search
@@ -2835,7 +2909,9 @@ def layout_flowgraph(g: FlowGraph, width: int) -> list[str]:
             "unconstrained" (size to content, one layout pass).
 
     Returns:
-        Rendered lines: monochrome unicode box-drawing, no ANSI.
+        Rendered lines: monochrome unicode box-drawing, whose only ANSI is
+        the emphasis a node/edge label's own markup asked for (zero display
+        columns, so the layout is the same either way).
     """
     if not g.nodes:
         return []

@@ -18,7 +18,7 @@ from termrender.renderers import (
 )
 from termrender.renderers.mermaid_degradation import raw_echo
 from termrender.renderers.mermaid_prelude import strip_prelude_lines
-from termrender.style import visual_ljust
+from termrender.style import ANSI_RE, visual_ljust
 
 
 def _first_line_type(source: str) -> str:
@@ -83,7 +83,15 @@ def render_mermaid_lines(source: str, width: int) -> list[str]:
 
 
 def render(block: Block, color: bool) -> list[str]:
-    """Render a mermaid diagram from pre-rendered or on-the-fly ASCII output."""
+    """Render a mermaid diagram from pre-rendered or on-the-fly ASCII output.
+
+    ``color`` gates styling but never geometry. The diagram is always laid
+    out styled — a label's emphasis runs are ANSI escapes, which cost no
+    display columns — so the boxes, borders and line routing are identical
+    either way, and turning color off is exactly dropping the escapes. That
+    keeps the width pass color-blind, which is the only way ``--color on``
+    and ``--color off`` can be guaranteed to produce the same layout.
+    """
     w = block.width
     rendered = block.attrs.get("_rendered")
 
@@ -92,5 +100,8 @@ def render(block: Block, color: bool) -> list[str]:
         raw_lines = render_mermaid_lines(source, w or 60)
     else:
         raw_lines = rendered.split("\n")
+
+    if not color:
+        raw_lines = [ANSI_RE.sub("", raw_line) for raw_line in raw_lines]
 
     return [visual_ljust(raw_line, w) for raw_line in raw_lines]

@@ -15,6 +15,17 @@ level rather than over the whole source is deliberate: ``--&gt;`` inside a
 quoted label must not become a real ``-->`` connector, and ``&amp;`` must
 not become flowchart's ``&`` node-group separator.
 
+:func:`apply_emphasis` is the companion step for the *other* markup mermaid
+labels genuinely support: the inline emphasis tags ``<b>``/``<strong>`` and
+``<i>``/``<em>``. Mermaid renders those as real emphasis, so echoing them
+literally puts ``<b>dialect</b>`` on screen. They become ANSI SGR runs here,
+and nothing else does — an arbitrary HTML tag is not markup this renderer
+claims to understand, so it is left exactly as the author typed it.
+
+Emphasis is applied *before* :func:`decode_entities`, never after: an author
+who wrote ``&lt;b&gt;`` escaped the tag deliberately and wants the literal
+characters, so decoding first would style the very text they escaped away.
+
 This module also owns :data:`BREAK_RE`, the shared "author asked for a line
 break" pattern. Authors write that break two ways — the documented ``<br/>``
 and a literal backslash-``n`` (``A["live list\nroute match"]``), which mermaid
@@ -32,6 +43,8 @@ from __future__ import annotations
 import html
 import re
 
+from termrender.style import BOLD, ITALIC, RESET
+
 # Numeric codes (``&#35;`` / ``#35;`` / ``&#x2b;`` / ``#x2b;``) in group 1,
 # named ones (``&lt;`` / ``#quot;``) in group 2. Both prefixes are accepted for
 # both forms because mermaid's hash form is exactly its HTML form with the
@@ -45,6 +58,77 @@ _CODE_RE = re.compile(
 # backslash-n. Each renderer substitutes its own replacement — a real newline
 # where the surface can stack lines, a separator where it cannot.
 BREAK_RE = re.compile(r"<br\s*/?>|\\n", re.IGNORECASE)
+
+# The inline emphasis tags mermaid's label dialect supports, opening or
+# closing. ``<br/>``'s trailing slash form is deliberately not accepted here
+# (a tag name must be followed by optional space then ``>``), so a line break
+# can never be mistaken for emphasis.
+_EMPHASIS_RE = re.compile(r"<(/?)(b|strong|i|em)\s*>", re.IGNORECASE)
+
+_EMPHASIS_SGR: dict[str, str] = {
+    "b": BOLD,
+    "strong": BOLD,
+    "i": ITALIC,
+    "em": ITALIC,
+}
+
+
+def apply_emphasis(text: str) -> str:
+    """Replace mermaid's inline emphasis tags in ``text`` with ANSI SGR runs.
+
+    Tags nest (``<b>a<i>b</i>c</b>``) and are matched innermost-first; a
+    close tag with no matching open one is dropped rather than echoed, and a
+    tag left open at the end of the label is closed for you. An escape is
+    emitted only when visible text follows it, so an empty pair like
+    ``<b></b>`` collapses to nothing rather than to a zero-width styled run
+    that later reads as a non-empty label.
+
+    Callers must keep the result out of every geometry decision they make by
+    measuring with :func:`~termrender.style.visual_len` and walking it with
+    :func:`~termrender.style.styled_clusters`; ``<b>dialect</b>`` is 14
+    source characters and 7 visible ones.
+    """
+    if "<" not in text:
+        return text
+
+    out: list[str] = []
+    open_tags: list[str] = []
+    emitted = ""  # the SGR currently open in ``out``
+
+    def write(chunk: str) -> None:
+        nonlocal emitted
+        if not chunk:
+            return
+        want = "".join(_EMPHASIS_SGR[t] for t in dict.fromkeys(open_tags))
+        if want != emitted:
+            # SGR is additive, so opening a tag inside another only needs
+            # the new code; anything else has to reset and re-open.
+            if want.startswith(emitted):
+                out.append(want[len(emitted):])
+            else:
+                if emitted:
+                    out.append(RESET)
+                out.append(want)
+            emitted = want
+        out.append(chunk)
+
+    pos = 0
+    for m in _EMPHASIS_RE.finditer(text):
+        write(text[pos:m.start()])
+        pos = m.end()
+        tag = m.group(2).lower()
+        if m.group(1):
+            for i in range(len(open_tags) - 1, -1, -1):
+                if open_tags[i] == tag:
+                    del open_tags[i]
+                    break
+        else:
+            open_tags.append(tag)
+    write(text[pos:])
+
+    if emitted:
+        out.append(RESET)
+    return "".join(out)
 
 
 def _resolve(code: str) -> str | None:
