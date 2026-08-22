@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## v4.12.11 (2026-08-22)
+
+### Bug Fixes
+
+- **mermaid**: Wrap node and edge labels at word boundaries
+  ([`8d5faff`](https://github.com/crouton-labs/termrender/commit/8d5faff0c59c3c157aa25a14a8a748314376ed84))
+
+A label narrow enough to wrap was sliced mid-word: `file-level rules only` rendered as `file-leve` /
+  `l rules`, which reads as corrupted output rather than a diagram.
+
+`_wrap_label_raw` treated the fit ladder's wrap budget as a hard slicing cap, so every rung below a
+  word's own width cut that word in half — and packed the fragment onto the tail of the current
+  line. The narrow rungs only ever "fit" a diagram by shredding its labels into syllables.
+
+The budget is now a wrap *target*. A word too wide for what is left of the line moves to the next
+  one whole, and `_box_dims` sizes the box from the longest line actually emitted, so the box grows
+  a few columns instead of cutting the word — the same give the single-wide-glyph case already had,
+  widened to the unit a reader actually parses. A mid-word break is kept for the one case it is
+  right: a word wider than the widest line this engine ever grants a label, which is then chunked at
+  the last cell that fits.
+
+Wrapping stays measured in visible cells, so ANSI emphasis (zero width) and East Asian wide glyphs
+  are unaffected, as are explicit `<br/>` breaks and emphasis re-opened across a wrap.
+
+
 ## v4.12.10 (2026-08-22)
 
 ### Bug Fixes
