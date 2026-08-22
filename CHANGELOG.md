@@ -1,6 +1,27 @@
 # CHANGELOG
 
 
+## v4.12.9 (2026-08-22)
+
+### Bug Fixes
+
+- **mermaid**: Render inline emphasis tags in labels as ANSI, not literal text
+  ([`dcf5336`](https://github.com/crouton-labs/termrender/commit/dcf5336acaefbe09bbbff1440472b3764785df97))
+
+A node or edge label using the mermaid dialect's own emphasis markup (`<b>`/`<strong>`,
+  `<i>`/`<em>`) drew the tags verbatim inside the box: labels were normalized for entity codes and
+  `<br/>` only, so the tags fell through as label text.
+
+They now become ANSI SGR runs. `apply_emphasis` runs before entity decoding, so an author-escaped
+  `&lt;b&gt;` still renders literally, and nothing outside those four tags is treated as markup.
+
+Every geometry decision keeps measuring visible text: `styled_clusters` and `active_sgr` let the
+  flow layout engine wrap, hard-break, center and write a styled label cell by cell without ever
+  counting an escape toward a width or slicing one across a cell, and `_carry_sgr` re-opens a run
+  that a line break strands. Layout therefore runs color-blind and `--color off` is exactly the same
+  picture with the escapes dropped.
+
+
 ## v4.12.8 (2026-08-17)
 
 ### Bug Fixes
