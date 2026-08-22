@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v4.12.10 (2026-08-22)
+
+### Bug Fixes
+
+- **style**: End an emphasis run with SGR 22/23, never a full reset
+  ([`779c604`](https://github.com/crouton-labs/termrender/commit/779c6044f83cf2f81002d4827762b8f2440b6694))
+
+Closing a bold or italic run with SGR 0 also cleared the styling of whatever host embedded the
+  output. crouter draws a mermaid diagram inside a chat-transcript region that carries its own
+  foreground colour, so the reset landed mid-line and every cell after an emphasized word -- the
+  label's padding and the box's right border -- lost that colour while the rest of the diagram kept
+  it.
+
+style.py now owns one SGR state model: `_fold_params` folds escapes down to the attributes in force
+  (understanding the disable codes as well as reset), and `sgr_transition(current, wanted)` emits
+  the escapes that move between two states, turning an attribute off with its own code (22 for
+  bold/dim, 23 for italic) and falling back to a reset only for an attribute that has none. The
+  mermaid label path, the flow canvas's cell-by-cell label writer, and `style()`'s own close all go
+  through it, which also deletes their separate open/close logic. A run carrying a colour still
+  closes with a reset: no code restores a colour this process never set.
+
+Escapes cost no display columns, so geometry and `--color off` output are unchanged.
+
+
 ## v4.12.9 (2026-08-22)
 
 ### Bug Fixes
