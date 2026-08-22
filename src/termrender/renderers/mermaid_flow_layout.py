@@ -128,9 +128,10 @@ Known degradations (by design, not bugs)
   along the flow axis (each box bottoms out at
   ``_MIN_LABEL_CONTENT_WIDTH + 4`` cells plus its inter-rank gap), or
   pre-formatted compartments (UML/ER boxes, which ignore the label
-  budget by design). At the narrowest budgets ``wrap_text`` breaks a long
-  word mid-word rather than let the box outgrow the budget — ugly, but
-  nothing is lost.
+  budget by design). A narrow budget also stops shrinking a box once its
+  longest *word* is the binding constraint: words stay whole and the box
+  outgrows the budget rather than reading as sliced syllables, so a label
+  of long words is itself irreducible (see :func:`_wrap_label_raw`).
 - Dense graphs may show edge-line crossings, and two edge labels sharing a
   crowded lane may overlap each other even after the nearest-clear-run
   shift — an accepted limit of the medium, not a routing bug.
@@ -270,9 +271,21 @@ def _wrap_label_raw(text: str, cells: int) -> list[str]:
     — and the two passes must agree exactly or the drawn text runs past
     the border it was sized to sit inside.
 
-    A word wider than the whole budget is hard-broken across lines (never
-    dropped); a single glyph wider than the budget still gets its own line
-    and simply makes that box a column wider than the budget asked for.
+    ``cells`` is a *wrap target*, not a slicing cap. Lines break at
+    whitespace, and a word too wide for what is left of the current line
+    moves to the next one **whole** — even when it is wider than ``cells``
+    itself, in which case it takes a line of its own and simply makes that
+    box a few columns wider than the budget asked for. That is the same
+    give the single-wide-glyph case has always had, widened to the unit a
+    reader actually parses: a label sliced mid-word (``file-leve`` /
+    ``l rules``) reads as corrupted, which costs more than the columns
+    holding the word whole would have saved.
+
+    A word wider than :data:`_MAX_LABEL_CONTENT_WIDTH` — the widest line
+    this engine ever grants a label, so wider than any line could hold it
+    whole — is the one case a mid-word break is right, and is hard-broken
+    at the last cell that fits ``cells`` (never dropped). A single glyph
+    wider than the budget still gets its own line rather than looping.
     """
     if not text:
         return [""]
@@ -285,6 +298,10 @@ def _wrap_label_raw(text: str, cells: int) -> list[str]:
         return [""]
     if cells <= 0:
         return [text]
+    # Words up to this stay whole and grow the box; only past it is a
+    # mid-word break the lesser evil. A budget wider than the cap raises
+    # it, so a word that fits its own line is never cut.
+    hard_cap = max(cells, _MAX_LABEL_CONTENT_WIDTH)
     lines: list[str] = []
     current = ""
     for word in text.split(" "):
@@ -293,21 +310,25 @@ def _wrap_label_raw(text: str, cells: int) -> list[str]:
             if current:
                 current += " "
             continue
-        while visual_len(word) > cells:
-            budget = cells if not current else cells - visual_len(current) - 1
-            chunk = _prefix_within_cells(word, budget) if budget > 0 else ""
-            if not chunk:
-                if current:
-                    lines.append(current)
-                    current = ""
-                    continue
-                # A single glyph wider than the entire budget: emit it
-                # anyway rather than loop forever — sizing measures the
-                # emitted lines, so the box grows to hold it.
-                chunk = next(grapheme_clusters(word))
-            lines.append(current + " " + chunk if current else chunk)
-            current = ""
-            word = word[len(chunk):]
+        if visual_len(word) > hard_cap:
+            # Past the cap no line can hold this word whole, so it is cut.
+            # It starts on a line of its own: a fragment packed onto the
+            # tail of the current line is the cut that reads as corruption.
+            if current:
+                lines.append(current)
+                current = ""
+            # The cap decided *whether* to cut; ``cells`` decides where.
+            # Keep cutting until the tail fits, so no chunk is left wider
+            # than the budget the box was sized to.
+            while visual_len(word) > cells:
+                chunk = _prefix_within_cells(word, cells)
+                if not chunk:
+                    # A single glyph wider than the entire budget: emit it
+                    # anyway rather than loop forever — sizing measures the
+                    # emitted lines, so the box grows to hold it.
+                    chunk = next(grapheme_clusters(word))
+                lines.append(chunk)
+                word = word[len(chunk):]
         if not word:
             continue
         if not current:
@@ -1092,11 +1113,12 @@ def _box_dims(
     the single lever the width-fitting loop (:func:`layout_flowgraph`)
     pulls to compact a diagram into a narrow terminal: a smaller cap makes
     every box narrower and taller without touching topology, direction, or
-    a single character of content. It is a *wrap* budget, not a clip:
-    :func:`wrap_text` hard-breaks a word longer than the cap onto a
-    further line rather than dropping any of it, so the box always holds
-    the whole label — at the narrowest budgets that mid-word break is the
-    visible cost of fitting.
+    a single character of content. It is a *wrap* target, not a clip and
+    not a hard cap: :func:`_wrap_label_raw` moves a word wider than the
+    budget onto its own line whole, and this function then sizes the box
+    from the longest line actually emitted — so the box always holds the
+    whole label, growing past ``label_width`` when a single word demands
+    it rather than cutting the word in half.
     """
     lines = _wrap_label(label or "", max(label_width, 1)) or [""]
     content_w = max((visual_len(line) for line in lines), default=0)

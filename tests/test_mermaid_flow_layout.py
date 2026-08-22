@@ -12,9 +12,12 @@ import re
 
 import pytest
 
+from termrender.style import visual_len
+
 from termrender.renderers.mermaid_flow_layout import (
     BoxRect,
     Canvas,
+    _wrap_label_raw,
     layout_flowgraph,
 )
 from termrender.renderers.mermaid_flow_model import (
@@ -635,3 +638,57 @@ def test_back_edge_return_leg_clears_source_rank_siblings():
             assert "Beta" not in line and "Cee" not in line, (
                 f"'returns' fused onto a sibling box's row: {line!r}"
             )
+
+
+# --------------------------------------------------------------------------
+# --- label wrapping: word boundaries ---
+# --------------------------------------------------------------------------
+
+
+def test_narrow_budget_wraps_at_whitespace_not_mid_word():
+    """A word too wide for the wrap budget moves to the next line whole.
+
+    The regression: the budget was treated as a slicing cap, so every rung
+    of the fit ladder below a word's own width cut it in half — the
+    reported ``file-level rules only`` rendering as ``file-leve`` /
+    ``l rules``, which reads as corrupted output.
+    """
+    for cells in (12, 9, 8, 6):
+        lines = _wrap_label_raw("file-level rules only", cells)
+        assert lines[0] == "file-level", (
+            f"budget {cells} cut a word instead of wrapping at a space: {lines!r}"
+        )
+        # Nothing may be lost or duplicated by the wrap.
+        assert " ".join(lines).split() == ["file-level", "rules", "only"], lines
+
+
+def test_word_longer_than_any_line_breaks_at_last_fitting_cell():
+    """The one correct mid-word break: a word no line could hold whole.
+
+    It is cut at the budget rather than overflowing or widening the box,
+    and every chunk — including the tail — respects the budget.
+    """
+    word = "supercalifragilisticexpialidocious"  # 34 cells
+    for cells in (20, 9, 6):
+        lines = _wrap_label_raw(word, cells)
+        assert max(visual_len(line) for line in lines) <= cells, (
+            f"budget {cells} left a chunk wider than the line: {lines!r}"
+        )
+        assert "".join(lines) == word, f"characters lost breaking {word!r}: {lines!r}"
+
+
+def test_wrap_budget_is_measured_in_cells_not_source_characters():
+    """Wide glyphs and ANSI escapes both make len() disagree with columns."""
+    # A CJK word is 2 cells per glyph: 7 glyphs = 14 cells, under the cap,
+    # so it stays whole rather than being sliced at a 6-cell budget.
+    assert _wrap_label_raw("\u65e5\u672c\u8a9e\u30c6\u30ad\u30b9\u30c8 \u3067\u3059", 6) == [
+        "\u65e5\u672c\u8a9e\u30c6\u30ad\u30b9\u30c8",
+        "\u3067\u3059",
+    ]
+    # Escapes cost no columns, so an emphasized label wraps at exactly the
+    # same words as the plain one.
+    styled = _wrap_label_raw("\x1b[1mfile-level rules only\x1b[22m", 12)
+    assert [re.sub(r"\x1b\[[0-9;]*m", "", line) for line in styled] == [
+        "file-level",
+        "rules only",
+    ]
