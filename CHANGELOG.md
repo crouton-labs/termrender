@@ -1,6 +1,20 @@
 # CHANGELOG
 
 
+## v4.12.12 (2026-09-09)
+
+### Bug Fixes
+
+- **mermaid**: Support unix-timestamp gantt dateFormat X and x
+  ([`e22a061`](https://github.com/crouton-labs/termrender/commit/e22a06193621467730440c840e76b7fd99f92573))
+
+A gantt using mermaid's unix-timestamp dateFormat ("X" seconds, "x" milliseconds) had every task
+  dropped: the format was translated as a literal strptime pattern, so numeric date tokens like "0,
+  120" never parsed, leaving no anchor for any task and degrading the whole diagram to raw source.
+  Parse those two formats as an offset from the epoch and label each bar with the numbers the author
+  wrote.
+
+
 ## v4.12.11 (2026-08-22)
 
 ### Bug Fixes
