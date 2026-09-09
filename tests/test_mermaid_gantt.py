@@ -114,7 +114,7 @@ class TestParseGantt(unittest.TestCase):
     def test_malformed_dateformat_degrades_whole_diagram(self):
         src = "gantt\n    dateFormat YYYY-YYYY\n    Task1 :2024-01-01, 5d\n"
         parsed = parse_gantt(src)
-        self.assertEqual(parsed, {"title": None, "sections": []})
+        self.assertEqual(parsed, {"title": None, "sections": [], "epoch": None})
 
     def test_huge_duration_degrades_whole_diagram(self):
         src = "gantt\n    dateFormat YYYY-MM-DD\n    Task1 :2024-01-01, 1000000000d\n"
@@ -126,7 +126,7 @@ class TestParseGantt(unittest.TestCase):
         # which overflows datetime.max for a task starting on 9999-12-31.
         src = "gantt\n    dateFormat YYYY-MM-DD\n    Task1 :9999-12-31\n"
         parsed = parse_gantt(src)
-        self.assertEqual(parsed, {"title": None, "sections": []})
+        self.assertEqual(parsed, {"title": None, "sections": [], "epoch": None})
 
     def test_skip_excluded_overflow_degrades_whole_diagram(self):
         # Task2's default start (last_end = 9999-12-31) falls on an
@@ -140,7 +140,7 @@ class TestParseGantt(unittest.TestCase):
             "    Task2 : 5d\n"
         )
         parsed = parse_gantt(src)
-        self.assertEqual(parsed, {"title": None, "sections": []})
+        self.assertEqual(parsed, {"title": None, "sections": [], "epoch": None})
 
     def test_includes_weekends_is_unsupported(self):
         # "includes weekends" isn't implemented (only explicit dates are);
@@ -226,6 +226,22 @@ class TestParseGantt(unittest.TestCase):
         task = parsed["sections"][0]["tasks"][0]
         self.assertEqual(task["start"], datetime(2024, 2, 1))
 
+    def test_unix_seconds_dateformat(self):
+        src = "gantt\n    dateFormat X\n    axisFormat %s\n    Task1 :0, 120"
+        parsed = parse_gantt(src)
+        self.assertEqual(parsed["epoch"], "s")
+        task = parsed["sections"][0]["tasks"][0]
+        self.assertEqual(task["start"], datetime(1970, 1, 1))
+        self.assertEqual(task["end"], datetime(1970, 1, 1, 0, 2))
+
+    def test_unix_milliseconds_dateformat(self):
+        src = "gantt\n    dateFormat x\n    Task1 :1500, 3000"
+        parsed = parse_gantt(src)
+        self.assertEqual(parsed["epoch"], "ms")
+        task = parsed["sections"][0]["tasks"][0]
+        self.assertEqual(task["start"], datetime(1970, 1, 1, 0, 0, 1, 500000))
+        self.assertEqual(task["end"], datetime(1970, 1, 1, 0, 0, 3))
+
 
 class TestRenderGantt(unittest.TestCase):
 
@@ -259,6 +275,21 @@ class TestRenderGantt(unittest.TestCase):
         src = "gantt\n    title nothing here\n"
         lines = render_gantt(src, width=40)
         self.assertEqual(lines, src.splitlines())
+
+    def test_unix_timestamp_bars_labelled_with_the_authored_numbers(self):
+        src = (
+            "gantt\n"
+            "    dateFormat X\n"
+            "    axisFormat %s\n"
+            "    section run\n"
+            "    whole run : 0, 120\n"
+            "    segment 1 : 0, 10\n"
+        )
+        lines = render_gantt(src, width=70)
+        joined = "\n".join(lines)
+        self.assertIn("█", joined)
+        self.assertIn("0\u2192120", joined)
+        self.assertIn("0\u219210", joined)
 
     def test_unsupported_construct_degrades_to_source(self):
         src = "gantt\n    dateFormat YYYY-YYYY\n    Task1 :2024-01-01, 5d\n"

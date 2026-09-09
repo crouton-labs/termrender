@@ -49,6 +49,14 @@ _DURATION_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*(d|w|h|m|s)$", re.IGNORECASE)
 _ID_RE = re.compile(r"^[A-Za-z_][\w-]*$")
 _UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
 
+# Mermaid (via dayjs) accepts two dateFormat values that are not token
+# patterns at all but unix timestamps: "X" (seconds) and "x" (milliseconds).
+# Dates in such a diagram are plain numbers, so they are parsed as an offset
+# from the epoch and displayed back as the numbers the author wrote.
+_EPOCH_UNITS = {"X": "s", "x": "ms"}
+_EPOCH_BASE = datetime(1970, 1, 1)
+_NUMBER_RE = re.compile(r"^-?\d+(?:\.\d+)?$")
+
 # Mermaid dateFormat tokens, longest-first so e.g. "YYYY" isn't partially
 # consumed by a "YY" replacement first.
 _DATE_TOKEN_MAP = [
@@ -101,6 +109,30 @@ def _parse_date(token: str, fmt: str) -> datetime | None:
         return datetime.strptime(token, fmt)
     except (ValueError, re.error):
         return None
+
+
+def _parse_epoch(token: str, unit: str) -> datetime | None:
+    """Parse a unix-timestamp token (``dateFormat X``/``x``) as a datetime.
+
+    Returns ``None`` for a non-numeric token or a magnitude ``datetime``
+    can't represent, so the caller skips it exactly as it skips an
+    unparseable date.
+    """
+    if not _NUMBER_RE.match(token):
+        return None
+    value = float(token)
+    seconds = value / 1000.0 if unit == "ms" else value
+    try:
+        return _EPOCH_BASE + timedelta(seconds=seconds)
+    except (OverflowError, ValueError):
+        return None
+
+
+def _fmt_epoch(dt: datetime, unit: str) -> str:
+    """Render a datetime back as the unix timestamp the author wrote."""
+    seconds = (dt - _EPOCH_BASE).total_seconds()
+    value = seconds * 1000.0 if unit == "ms" else seconds
+    return str(int(value)) if value.is_integer() else f"{value:g}"
 
 
 def _parse_excludes_tokens(spec: str) -> tuple[bool, set[date]]:
@@ -213,7 +245,9 @@ def _advance_working_days(
 def parse_gantt(source: str) -> dict:
     """Parse the core mermaid gantt grammar into a title + section/task tree.
 
-    Handles ``dateFormat``, ``title``, ``section``, ``excludes``
+    Handles ``dateFormat`` (token patterns plus mermaid's unix-timestamp
+    formats ``X`` in seconds and ``x`` in milliseconds), ``title``,
+    ``section``, ``excludes``
     (``weekends`` and explicit dates), ``includes`` (explicit dates only),
     ``%%`` comments, ``milestone`` tasks, ``until <taskId>``, and task
     lines of the form ``name : [status,] [id,] [start-date|after id,]
@@ -226,22 +260,25 @@ def parse_gantt(source: str) -> dict:
     numeric or date-arithmetic overflow, an ``until`` reference to an
     unknown task id, or an ``excludes``/``includes`` form beyond
     ``weekends``/explicit dates) degrades the *whole* diagram: this
-    returns ``{"title": None, "sections": []}``, which the renderer
-    falls back to raw source for.
+    returns ``{"title": None, "sections": [], "epoch": None}``, which the
+    renderer falls back to raw source for.
 
-    Returns ``{"title": str | None, "sections": [{"name": str | None,
-    "tasks": [{"label": str, "start": datetime, "end": datetime,
-    "milestone": bool}]}]}``. Sections with no successfully parsed tasks
-    are dropped.
+    Returns ``{"title": str | None, "epoch": "s" | "ms" | None,
+    "sections": [{"name": str | None, "tasks": [{"label": str, "start":
+    datetime, "end": datetime, "milestone": bool}]}]}``. ``epoch`` is the
+    unit of the active unix-timestamp ``dateFormat``, or ``None`` for a
+    calendar-date format. Sections with no successfully parsed tasks are
+    dropped.
     """
     try:
         return _parse_gantt(source)
     except _Unsupported:
-        return {"title": None, "sections": []}
+        return {"title": None, "sections": [], "epoch": None}
 
 
 def _parse_gantt(source: str) -> dict:
     fmt = "%Y-%m-%d"
+    epoch: str | None = None
     title: str | None = None
     sections: list[dict] = [{"name": None, "tasks": []}]
     task_ends: dict[str, datetime] = {}
@@ -263,10 +300,15 @@ def _parse_gantt(source: str) -> dict:
 
         m = _DATEFORMAT_RE.match(line)
         if m:
+            unit = _EPOCH_UNITS.get(m.group(1))
+            if unit is not None:
+                epoch = unit
+                continue
             candidate = _strptime_format(m.group(1))
             if not _valid_strptime_format(candidate):
                 raise _Unsupported(f"invalid dateFormat {m.group(1)!r}")
             fmt = candidate
+            epoch = None
             continue
 
         m = _SECTION_RE.match(line)
@@ -321,7 +363,7 @@ def _parse_gantt(source: str) -> dict:
             if dm:
                 duration_amount, duration_unit = float(dm.group(1)), dm.group(2).lower()
                 continue
-            dt = _parse_date(tok, fmt)
+            dt = _parse_epoch(tok, epoch) if epoch else _parse_date(tok, fmt)
             if dt is not None:
                 if start is None:
                     start = dt
@@ -390,7 +432,7 @@ def _parse_gantt(source: str) -> dict:
             task_starts[task_id] = start
 
     sections = [s for s in sections if s["tasks"]]
-    return {"title": title, "sections": sections}
+    return {"title": title, "sections": sections, "epoch": epoch}
 
 
 def _draw_span(width: int, start_ratio: float, end_ratio: float) -> str:
@@ -411,8 +453,11 @@ def _draw_milestone(width: int, ratio: float) -> str:
     return "░" * col + "◆" + "░" * (width - col - 1)
 
 
-def _fmt_range(task: dict) -> str:
+def _fmt_range(task: dict, epoch: str | None = None) -> str:
     start, end = task["start"], task["end"]
+    if epoch:
+        first, last = _fmt_epoch(start, epoch), _fmt_epoch(end, epoch)
+        return first if first == last else f"{first}\u2192{last}"
     if start.date() == end.date():
         return start.strftime("%Y-%m-%d")
     return f"{start:%Y-%m-%d}\u2192{end:%Y-%m-%d}"
@@ -435,8 +480,9 @@ def render(source: str, width: int) -> list[str]:
     max_end = max(t["end"] for t in tasks)
     span = (max_end - min_start).total_seconds() or 1.0
 
+    epoch = parsed["epoch"]
     label_w = max(visual_len(t["label"]) for t in tasks)
-    date_w = max(visual_len(_fmt_range(t)) for t in tasks)
+    date_w = max(visual_len(_fmt_range(t, epoch)) for t in tasks)
     bar_w = max(width - label_w - date_w - 4, 5)
 
     lines: list[str] = []
@@ -454,7 +500,7 @@ def render(source: str, width: int) -> list[str]:
                 end_ratio = (t["end"] - min_start).total_seconds() / span
                 bar = _draw_span(bar_w, start_ratio, end_ratio)
             label = visual_ljust(t["label"], label_w)
-            date_str = _fmt_range(t).rjust(date_w)
+            date_str = _fmt_range(t, epoch).rjust(date_w)
             lines.append(visual_ljust(f"{label}  {bar}  {date_str}", width))
 
     return lines
