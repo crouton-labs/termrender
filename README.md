@@ -474,3 +474,5 @@ About 1,400 lines across 12 modules. No magic.
 ## License
 
 MIT
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) to contribute.
