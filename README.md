@@ -1,4 +1,11 @@
-# termrender
+# termrender — renders directive-flavored markdown as formatted terminal output
+
+![termrender](https://raw.githubusercontent.com/crouton-labs/termrender/main/assets/banner.svg)
+
+<p align="center">
+  <a href="https://www.python.org"><img alt="python" src="https://img.shields.io/badge/python-%3E%3D3.10-3776AB"></a>
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-blue"></a>
+</p>
 
 Rich terminal rendering of directive-flavored markdown.
 
