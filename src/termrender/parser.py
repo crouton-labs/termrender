@@ -37,6 +37,12 @@ def _sanitize_text(text: str) -> str:
     """Strip non-SGR ANSI escape sequences from text."""
     return _UNSAFE_ANSI_RE.sub('', text)
 
+
+def _sanitize_href(url: str) -> str:
+    """Drop control characters from a link target so it cannot end the
+    OSC 8 sequence that carries it early."""
+    return ''.join(c for c in url if c >= ' ' and c != '\x7f')
+
 # Directive opener: :::name or ::::name etc. (3+ colons)
 _DIRECTIVE_OPEN = re.compile(
     r"^(:{3,})(\w+)(?:\{([^}]*)\})?\s*$"
@@ -140,13 +146,20 @@ def _convert_inline(nodes: list[dict]) -> list[InlineSpan]:
             for child in _convert_inline(node.get("children", [])):
                 spans.append(InlineSpan(
                     text=child.text, bold=True, italic=child.italic, code=child.code,
-                    fg=child.fg, bg=child.bg,
+                    fg=child.fg, bg=child.bg, href=child.href,
                 ))
         elif ntype == "emphasis":
             for child in _convert_inline(node.get("children", [])):
                 spans.append(InlineSpan(
                     text=child.text, italic=True, bold=child.bold, code=child.code,
-                    fg=child.fg, bg=child.bg,
+                    fg=child.fg, bg=child.bg, href=child.href,
+                ))
+        elif ntype == "link":
+            url = _sanitize_href(node.get("attrs", {}).get("url", ""))
+            for child in _convert_inline(node.get("children", [])):
+                spans.append(InlineSpan(
+                    text=child.text, bold=child.bold, italic=child.italic, code=child.code,
+                    fg=child.fg, bg=child.bg, href=url or None,
                 ))
         elif ntype == "softbreak":
             spans.append(InlineSpan(text=" "))
@@ -181,6 +194,7 @@ def _merge_plain_spans(spans: list[InlineSpan]) -> list[InlineSpan]:
             and out[-1].italic == span.italic
             and out[-1].fg == span.fg
             and out[-1].bg == span.bg
+            and out[-1].href == span.href
         ):
             merged = InlineSpan(
                 text=out[-1].text + span.text,
@@ -189,6 +203,7 @@ def _merge_plain_spans(spans: list[InlineSpan]) -> list[InlineSpan]:
                 code=False,
                 fg=span.fg,
                 bg=span.bg,
+                href=span.href,
             )
             out[-1] = merged
         else:
@@ -230,7 +245,7 @@ def _expand_inline_roles(spans: list[InlineSpan]) -> list[InlineSpan]:
                 out.append(InlineSpan(
                     text=text[last:m.start()],
                     bold=span.bold, italic=span.italic, code=span.code,
-                    fg=span.fg, bg=span.bg,
+                    fg=span.fg, bg=span.bg, href=span.href,
                 ))
             role = m.group(1)
             content = m.group(2)
@@ -259,7 +274,7 @@ def _expand_inline_roles(spans: list[InlineSpan]) -> list[InlineSpan]:
             out.append(InlineSpan(
                 text=text[last:],
                 bold=span.bold, italic=span.italic, code=span.code,
-                fg=span.fg, bg=span.bg,
+                fg=span.fg, bg=span.bg, href=span.href,
             ))
     return out
 
@@ -750,6 +765,7 @@ def _apply_tasklist_markers(block: Block) -> Block:
                         code=item.text[0].code,
                         fg=item.text[0].fg,
                         bg=item.text[0].bg,
+                        href=item.text[0].href,
                     )
                     any_task = True
         if any_task:

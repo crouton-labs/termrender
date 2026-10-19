@@ -49,6 +49,8 @@ class InlineSpan:
     code: bool = False
     fg: str | None = None
     bg: str | None = None
+    # Link target. With colour on, the span renders as an OSC 8 hyperlink.
+    href: str | None = None
 
 
 @dataclass

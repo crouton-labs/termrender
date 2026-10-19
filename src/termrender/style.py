@@ -14,6 +14,9 @@ if TYPE_CHECKING:
 
 # Compiled regex matching ANSI escape sequences
 ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+# An OSC 8 hyperlink opener or closer. It occupies no cells, so width
+# measurement strips it alongside SGR.
+OSC8_RE = re.compile(r'\x1b\]8;[^;\x07\x1b]*;[^\x07\x1b]*(?:\x07|\x1b\\)')
 
 # Ambiguous-width character handling.
 # 1 = narrow (default for most Western terminals)
@@ -87,6 +90,7 @@ RESET = '\x1b[0m'
 BOLD = '\x1b[1m'
 ITALIC = '\x1b[3m'
 DIM = '\x1b[2m'
+UNDERLINE = '\x1b[4m'
 
 # The attribute-scoped "off" codes. Ending a run with one of these turns off
 # exactly that attribute and leaves every other attribute in force — unlike
@@ -103,6 +107,7 @@ _SGR_OFF: dict[str, str] = {
     '1': '22',
     '2': '22',
     '3': '23',
+    '4': '24',
 }
 _SGR_OFF_CODES = frozenset(_SGR_OFF.values())
 
@@ -157,6 +162,7 @@ def style(
     italic: bool = False,
     dim: bool = False,
     enabled: bool = True,
+    underline: bool = False,
 ) -> str:
     if not enabled:
         return text
@@ -168,6 +174,8 @@ def style(
         prefix += ITALIC
     if dim:
         prefix += DIM
+    if underline:
+        prefix += UNDERLINE
     if not prefix:
         return text
     # A pure-attribute run closes with its own disable codes so it can sit
@@ -207,7 +215,7 @@ def grapheme_clusters(text: str) -> Iterator[str]:
 def visual_len(s: str) -> int:
     """Return visual display width of string, ignoring ANSI codes."""
     width = 0
-    for cluster in grapheme_clusters(ANSI_RE.sub('', s)):
+    for cluster in grapheme_clusters(ANSI_RE.sub('', OSC8_RE.sub('', s))):
         cluster_width = max((_char_width(char) for char in cluster), default=0)
         # VS16 turns the cluster into its emoji-presentation form.
         if "\ufe0f" in cluster:
@@ -380,20 +388,35 @@ def wrap_text(text: str, width: int) -> list[str]:
     return lines if lines else ['']
 
 
+def hyperlink(text: str, url: str) -> str:
+    """Wrap ``text`` in an OSC 8 hyperlink to ``url``."""
+    return f'\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\'
+
+
+def style_span(text: str, span: InlineSpan, color: bool) -> str:
+    """Style ``text`` (all or part of ``span``) with the span's formatting.
+
+    A linked span is underlined and, with colour on, wrapped in an OSC 8
+    hyperlink so a terminal that supports it opens ``span.href`` on click.
+    Callers style one row's slice at a time, so a link that wraps opens and
+    closes on each row it covers.
+    """
+    link = span.href is not None
+    if span.code:
+        text = style(text, color="cyan", underline=link, enabled=color)
+    elif span.fg or span.bg:
+        text = style(
+            text,
+            color=span.fg, bg=span.bg,
+            bold=span.bold, italic=span.italic, underline=link,
+            enabled=color,
+        )
+    elif span.bold or span.italic or link:
+        text = style(text, bold=span.bold, italic=span.italic, underline=link, enabled=color)
+    if link and color:
+        text = hyperlink(text, span.href)
+    return text
+
+
 def render_spans(spans: list[InlineSpan], color: bool) -> str:
-    parts: list[str] = []
-    for span in spans:
-        text = span.text
-        if span.code:
-            text = style(text, color="cyan", enabled=color)
-        elif span.fg or span.bg:
-            text = style(
-                text,
-                color=span.fg, bg=span.bg,
-                bold=span.bold, italic=span.italic,
-                enabled=color,
-            )
-        elif span.bold or span.italic:
-            text = style(text, bold=span.bold, italic=span.italic, enabled=color)
-        parts.append(text)
-    return ''.join(parts)
+    return ''.join(style_span(span.text, span, color) for span in spans)

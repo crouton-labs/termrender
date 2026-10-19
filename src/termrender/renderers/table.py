@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from termrender.blocks import Block, InlineSpan, Span
-from termrender.style import style, visual_len, visual_ljust, visual_center, render_spans, wrap_text
+from termrender.style import style, visual_len, visual_ljust, visual_center, render_spans, style_span, wrap_text
 
 
 def _align_cell(text: str, width: int, align: str | None) -> str:
@@ -31,18 +31,7 @@ def _render_span_slice(
         overlap_end = min(span_end, end)
         if overlap_start < overlap_end:
             slice_text = span.text[overlap_start - span_start : overlap_end - span_start]
-            if span.code:
-                slice_text = style(slice_text, color="cyan", enabled=color)
-            elif span.fg or span.bg:
-                slice_text = style(
-                    slice_text,
-                    color=span.fg, bg=span.bg,
-                    bold=span.bold, italic=span.italic,
-                    enabled=color,
-                )
-            elif span.bold or span.italic:
-                slice_text = style(slice_text, bold=span.bold, italic=span.italic, enabled=color)
-            parts.append(slice_text)
+            parts.append(style_span(slice_text, span, color))
         offset = span_end
         if offset >= end:
             break
