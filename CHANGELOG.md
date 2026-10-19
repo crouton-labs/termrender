@@ -1,6 +1,27 @@
 # CHANGELOG
 
 
+## v4.13.0 (2026-10-19)
+
+### Documentation
+
+- Add CONTRIBUTING and SECURITY
+  ([`e81d68b`](https://github.com/crouton-labs/termrender/commit/e81d68bcc848d0d43dbfb771b50853e0cd647fc0))
+
+- Add README header (H1, banner, badges)
+  ([`df68aa7`](https://github.com/crouton-labs/termrender/commit/df68aa7ac58c60695d107a9a4f072e6aa7e18b69))
+
+### Features
+
+- **links**: Render Markdown links as OSC 8 hyperlinks
+  ([`3862ff7`](https://github.com/crouton-labs/termrender/commit/3862ff7ba67a249e50a08586c3fe28965206860f))
+
+A [text](url) link now renders underlined and, with colour on, wrapped in an OSC 8 hyperlink so a
+  supporting terminal opens the target on click. Previously the link's text rendered as plain text
+  and the target was dropped. Width measurement ignores the OSC 8 escapes, and a link that wraps
+  opens and closes on each row it covers.
+
+
 ## v4.12.12 (2026-09-09)
 
 ### Bug Fixes
