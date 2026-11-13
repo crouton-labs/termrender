@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v4.14.0 (2026-11-13)
+
+### Features
+
+- **mermaid**: Render xychart / xychart-beta diagrams as labelled bars
+  ([`5f10deb`](https://github.com/crouton-labs/termrender/commit/5f10debeb4b56f5d2d9ba86d6720155472b26438))
+
+
 ## v4.13.0 (2026-10-19)
 
 ### Documentation
