@@ -15,6 +15,7 @@ from termrender.renderers import (
     mermaid_sequence,
     mermaid_state,
     mermaid_timeline,
+    mermaid_xychart,
 )
 from termrender.renderers.mermaid_degradation import raw_echo
 from termrender.renderers.mermaid_prelude import strip_prelude_lines
@@ -48,7 +49,7 @@ def render_mermaid_lines(source: str, width: int) -> list[str]:
 
     Every diagram type mermaid supports that termrender renders has a
     dedicated native Python renderer: ``pie``, ``gantt``, ``gitGraph``,
-    ``sequenceDiagram``, ``mindmap``, ``journey``, ``timeline``,
+    ``sequenceDiagram``, ``mindmap``, ``journey``, ``timeline``, ``xychart``,
     ``graph``/``flowchart``, ``classDiagram``, ``stateDiagram``/``stateDiagram-v2``,
     and ``erDiagram``. Any other type (sankey, C4, block, packet, kanban, …,
     or anything unrecognized) degrades to a raw echo of the source with no
@@ -59,6 +60,8 @@ def render_mermaid_lines(source: str, width: int) -> list[str]:
     diagram_type = _first_line_type(source)
     if diagram_type.startswith("pie"):
         return mermaid_pie.render(source, width)
+    if diagram_type.startswith("xychart"):
+        return mermaid_xychart.render(_stripped(source), width)
     if diagram_type.startswith("gantt"):
         return mermaid_gantt.render(source, width)
     if diagram_type.startswith("gitgraph"):
